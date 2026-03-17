@@ -1,4 +1,4 @@
-# Blueclaw
+# Lynxclaw
 
 轻量级 AI 智能体运行平台。以 Anthropic Claude Agent SDK（Python）为核心，将 Claude Agent 安全地运行在 Docker 容器中，通过 Telegram / 飞书与用户交互。
 
@@ -46,8 +46,8 @@ Docker Container  (--cap-drop ALL / --read-only / --network none)
 ### 安装
 
 ```bash
-git clone https://github.com/yourname/blueclaw.git
-cd blueclaw
+git clone https://github.com/yourname/lynxclaw.git
+cd lynxclaw
 
 # 创建并激活虚拟环境
 python -m venv .venv
@@ -66,7 +66,7 @@ cp .env.example .env
 
 ```bash
 # 构建 Agent 容器镜像
-docker build -t blueclaw-agent:latest container/agent-runner/
+docker build -t lynxclaw-agent:latest container/agent-runner/
 
 # 启动宿主进程
 python -m src.main
@@ -81,7 +81,7 @@ pytest tests/test_db.py          # 单个测试文件
 
 ## 配置
 
-主配置文件：`blueclaw.config.yaml`（参考 `docs/ARCHITECTURE.md §8`）
+主配置文件：`lynxclaw.config.yaml`（参考 `docs/ARCHITECTURE.md §8`）
 
 ```yaml
 container:

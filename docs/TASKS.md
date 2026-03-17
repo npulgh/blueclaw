@@ -1,4 +1,4 @@
-# Blueclaw — 开发任务清单
+# Lynxclaw — 开发任务清单
 
 > 本文件是 AI Agent 和人类开发者的实施指南。
 > 每个任务是一个可独立实现、独立测试的工作单元。
@@ -41,11 +41,11 @@
 - `src/main.py` 包含 `async def main()` 空壳 + SIGTERM/SIGINT handler
 - `.env.example` 列出所有环境变量占位
 
-**验收**：`python -m src.main` 启动后打印 "Blueclaw starting..."，Ctrl+C 优雅退出。
+**验收**：`python -m src.main` 启动后打印 "Lynxclaw starting..."，Ctrl+C 优雅退出。
 
 ### T1.2 配置系统
 
-**文件**：`src/config.py`, `blueclaw.config.yaml`
+**文件**：`src/config.py`, `lynxclaw.config.yaml`
 
 - 加载 YAML 配置 + `.env` 环境变量
 - 配置 dataclass 类型提示
@@ -112,7 +112,7 @@
 - Group Queue（`asyncio.Queue(maxsize=10)`）
 - 背压：队列满时返回排队提示
 
-**设计修订**（来源：产品工程引擎）：增加 Group 静态配置加载——从 `blueclaw.config.yaml` 的 `groups:` 段读取 `chat_id → group_name` 映射并写入 DB。这是端到端链路必需的"胶水"功能，否则 Router 的 Group 查找无数据可查。~30 行。
+**设计修订**（来源：产品工程引擎）：增加 Group 静态配置加载——从 `lynxclaw.config.yaml` 的 `groups:` 段读取 `chat_id → group_name` 映射并写入 DB。这是端到端链路必需的"胶水"功能，否则 Router 的 Group 查找无数据可查。~30 行。
 
 **验收**：
 - 单元测试：重复 message_id → 只处理一次
@@ -184,7 +184,7 @@
 - 容器冷启动期间发送 typing indicator 或"正在思考..."占位消息，缓解 1-3 秒等待的用户焦虑。~5 行。
 
 **验收**：
-- 启动 Blueclaw → 给 Telegram Bot 发消息 → 收到 Agent 回复
+- 启动 Lynxclaw → 给 Telegram Bot 发消息 → 收到 Agent 回复
 - 日志中可见完整消息流
 
 **depends**: T1.5, T1.6, T1.7, T1.8, T1.9
@@ -269,7 +269,7 @@
 
 - 启动时扫描 status='processing' 的消息 → 重新入队
 - cursors 表记录各 Channel 最后处理的 message_id
-- 启动时清理孤儿容器（`docker ps --filter label=blueclaw`）
+- 启动时清理孤儿容器（`docker ps --filter label=lynxclaw`）
 
 **验收**：模拟宕机（kill -9）→ 重启 → 未处理消息自动恢复。
 

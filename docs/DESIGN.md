@@ -1,6 +1,6 @@
-# Blueclaw — 设计文档索引
+# Lynxclaw — 设计文档索引
 
-> **Blueclaw** 是一个轻量级 AI 智能体运行平台，以 Anthropic Claude Agent SDK（Python）为核心，将 Claude Agent 安全地运行在 Docker 容器中，通过 IM（Telegram / 飞书）与用户交互。
+> **Lynxclaw** 是一个轻量级 AI 智能体运行平台，以 Anthropic Claude Agent SDK（Python）为核心，将 Claude Agent 安全地运行在 Docker 容器中，通过 IM（Telegram / 飞书）与用户交互。
 
 ---
 

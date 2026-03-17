@@ -11,7 +11,7 @@ Telegram 接入使用 **aiogram v3**，而非 python-telegram-bot 或其他 Tele
 
 ## 背景
 
-Blueclaw 宿主进程基于 Python asyncio 单进程模型运行，需要一个原生支持 asyncio 的 Telegram Bot SDK，且支持 Long Polling 和 Webhook 两种模式。
+Lynxclaw 宿主进程基于 Python asyncio 单进程模型运行，需要一个原生支持 asyncio 的 Telegram Bot SDK，且支持 Long Polling 和 Webhook 两种模式。
 
 ## 考虑的方案
 
@@ -24,9 +24,9 @@ Blueclaw 宿主进程基于 Python asyncio 单进程模型运行，需要一个�
 
 ## 理由
 
-1. **原生 asyncio**：aiogram v3 从底层就是为 asyncio 设计的，与 Blueclaw 的 asyncio 宿主进程天然契合。
+1. **原生 asyncio**：aiogram v3 从底层就是为 asyncio 设计的，与 Lynxclaw 的 asyncio 宿主进程天然契合。
 2. **Dispatcher 架构**：内置 `Dispatcher.start_polling()` 和 webhook 模式，切换只需改配置。
-3. **Middleware 支持**：可插入幂等检查、日志、限流等中间件，与 Blueclaw 的路由器设计高度匹配。
+3. **Middleware 支持**：可插入幂等检查、日志、限流等中间件，与 Lynxclaw 的路由器设计高度匹配。
 4. **活跃维护**：aiogram v3 于 2023 年发布大版本，社区活跃，Bug 修复及时。
 
 ## 权衡

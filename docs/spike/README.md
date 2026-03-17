@@ -1,4 +1,4 @@
-# Blueclaw — 技术验证 Spike
+# Lynxclaw — 技术验证 Spike
 
 > 来源：[多引擎综合审视](../../notes/multi-engine-review.md)
 > 状态：待执行
@@ -12,7 +12,7 @@
 
 ## 为什么需要 Spike
 
-Blueclaw 的架构建立在三个未经验证的核心假设上：
+Lynxclaw 的架构建立在三个未经验证的核心假设上：
 
 1. **Python Claude Agent SDK** 的 hooks / resume / MCP 机制可用且行为符合预期
 2. **watchdog + Docker Volume** 的文件事件通知在 Windows Docker Desktop (WSL2) 上可靠

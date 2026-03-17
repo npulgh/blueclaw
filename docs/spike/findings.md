@@ -1,4 +1,4 @@
-# Blueclaw — Spike 执行发现记录
+# Lynxclaw — Spike 执行发现记录
 
 > 本文件在 Spike 执行过程中填写，记录每项验证的实际结果。
 > 设计文档见 [README.md](README.md)。
