@@ -7,7 +7,7 @@
 
 ## 决策
 
-Blueclaw 的 Channel 接入**默认使用长连接**（Telegram Long Polling / 飞书 WebSocket），Webhook 作为可选备用模式。
+Lynxclaw 的 Channel 接入**默认使用长连接**（Telegram Long Polling / 飞书 WebSocket），Webhook 作为可选备用模式。
 
 ## 背景
 
@@ -30,7 +30,7 @@ IM 平台消息接入有两种主流方式：长连接（客户端主动保持�
 
 ## 权衡
 
-- 长连接是单点模式，不能多实例负载均衡（但 Blueclaw 设计为单机部署，不需要）。
+- 长连接是单点模式，不能多实例负载均衡（但 Lynxclaw 设计为单机部署，不需要）。
 - 需要可靠的重连逻辑（aiogram 和 lark-oapi 都内置了自动重连）。
 - 高流量场景下 Webhook 更高效（但 IM Bot 场景下消息频率远未达到瓶颈）。
 - 保留 Webhook 作为可选模式（T2.6），供有公网部署需求的用户选择。

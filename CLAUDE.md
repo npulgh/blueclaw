@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-**Blueclaw is in the design/planning phase.** No source code exists yet. The repository contains only design documents and research notes. Implementation starts from T1.1 in `docs/TASKS.md`.
+**Lynxclaw is in the design/planning phase.** No source code exists yet. The repository contains only design documents and research notes. Implementation starts from T1.1 in `docs/TASKS.md`.
 
 ## What This Project Is
 
-**Blueclaw** is a lightweight AI agent runtime platform. It runs Anthropic Claude Agents inside hardened Docker containers and connects them to IM platforms (Telegram + Feishu). The guiding principles are: container-as-security-boundary, defense in depth, streaming-first responses, and a codebase small enough to audit (≤ 5,000 lines).
+**Lynxclaw** is a lightweight AI agent runtime platform. It runs Anthropic Claude Agents inside hardened Docker containers and connects them to IM platforms (Telegram + Feishu). The guiding principles are: container-as-security-boundary, defense in depth, streaming-first responses, and a codebase small enough to audit (≤ 5,000 lines).
 
 ## Key Design Documents
 
@@ -17,7 +17,7 @@ Read these before implementing anything:
 - `docs/ARCHITECTURE.md` — component design, security model, data schema, directory structure, config schema. **Start here.**
 - `docs/TASKS.md` — phased task list with acceptance criteria and inter-task dependencies. Each task is the unit of work.
 - `docs/adr/` — architecture decision records explaining *why* key decisions were made.
-- `notes/nanoclaw-architecture.md` — analysis of NanoClaw (TypeScript), the reference implementation Blueclaw improves upon.
+- `notes/nanoclaw-architecture.md` — analysis of NanoClaw (TypeScript), the reference implementation Lynxclaw improves upon.
 
 ## Development Workflow
 
@@ -28,7 +28,7 @@ Tasks are defined in `docs/TASKS.md` and must be done sequentially within each p
 python -m src.main           # Start the host process
 python -m pytest tests/      # Run all tests
 python -m pytest tests/test_db.py   # Run a single test file
-docker build -t blueclaw-agent:latest container/agent-runner/   # Build agent image
+docker build -t lynxclaw-agent:latest container/agent-runner/   # Build agent image
 ```
 
 ## Technology Stack

@@ -1,6 +1,6 @@
-# Blueclaw — 系统架构
+# Lynxclaw — 系统架构
 
-> 本文件描述 Blueclaw 的技术架构、组件设计和安全模型。
+> 本文件描述 Lynxclaw 的技术架构、组件设计和安全模型。
 > AI Agent 在实现功能前应先阅读本文件，理解"系统是怎么建的"。
 >
 > 关联文档：
@@ -11,7 +11,7 @@
 
 ## 一、项目定位
 
-**Blueclaw** 是一个轻量级 AI 智能体运行平台，以 **Anthropic Claude Agent SDK（Python）** 为核心，将 Claude Agent 安全地运行在 Docker 容器中，通过 IM（Telegram / 飞书）与用户交互。
+**Lynxclaw** 是一个轻量级 AI 智能体运行平台，以 **Anthropic Claude Agent SDK（Python）** 为核心，将 Claude Agent 安全地运行在 Docker 容器中，通过 IM（Telegram / 飞书）与用户交互。
 
 ### 设计哲学
 
@@ -31,7 +31,7 @@
 
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
-│                     Blueclaw Host Process (Python / asyncio)      │
+│                     Lynxclaw Host Process (Python / asyncio)      │
 │                                                                  │
 │  ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐       │
 │  │  Telegram    │  │   Feishu    │  │  Future Channel    │       │
@@ -63,7 +63,7 @@
             │  │  (Claude Agent SDK - Python)    │  │
             │  │                                 │  │
             │  │  Built-in: Bash Read Write Edit │  │
-            │  │  MCP: blueclaw IPC bridge       │  │
+            │  │  MCP: lynxclaw IPC bridge       │  │
             │  │  Hooks: PreToolUse / PostToolUse│  │
             │  └────────────────────────────────┘  │
             │                                      │
@@ -169,9 +169,9 @@ docker run --rm \
   -v {project_dir}:/workspace/project:ro \
   -v {ipc_dir}:/workspace/ipc:rw \
   -e ANTHROPIC_API_KEY \
-  -e BLUECLAW_GROUP={group} \
-  -e BLUECLAW_SESSION_ID={session_id} \
-  blueclaw-agent:latest
+  -e LYNXCLAW_GROUP={group} \
+  -e LYNXCLAW_SESSION_ID={session_id} \
+  lynxclaw-agent:latest
 ```
 
 #### 并发控制
@@ -256,7 +256,7 @@ Agent 边生成边推送，宿主收到 `stream_chunk` 后转发到 IM：
 ```text
 容器内 Agent → HTTP_PROXY=socks5h://proxy → /run/proxy.sock
   ↓ (Unix Socket)
-宿主 blueclaw-proxy → 域名白名单 + 请求日志 + 速率限制
+宿主 lynxclaw-proxy → 域名白名单 + 请求日志 + 速率限制
 ```
 
 即使 Agent 被 prompt injection 劫持，也无法访问白名单外的域名。
@@ -421,14 +421,14 @@ CREATE TABLE tool_audit_log (
 
 ## 八、配置结构
 
-**文件**：`blueclaw.config.yaml`
+**文件**：`lynxclaw.config.yaml`
 
 ```yaml
 host:
   log_level: info
 
 container:
-  image: blueclaw-agent:latest
+  image: lynxclaw-agent:latest
   memory: 512m
   cpus: 1.0
   network: none                     # none | proxy
@@ -471,7 +471,7 @@ security:
 ## 九、目录结构
 
 ```text
-blueclaw/
+lynxclaw/
 ├── src/
 │   ├── main.py                 # 宿主编排器（graceful shutdown）
 │   ├── config.py               # 配置加载
@@ -505,7 +505,7 @@ blueclaw/
 │   ├── ARCHITECTURE.md         # 本文件
 │   ├── TASKS.md                # 开发任务清单
 │   └── adr/                    # 架构决策记录
-├── blueclaw.config.yaml
+├── lynxclaw.config.yaml
 ├── docker-compose.yml
 ├── pyproject.toml
 └── .env.example
