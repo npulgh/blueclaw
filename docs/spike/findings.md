@@ -9,11 +9,12 @@
 
 | 项目 | 值 |
 | ---- | ---- |
-| 日期 | （待填） |
-| OS | （待填，如 Windows 11 Pro + WSL2） |
-| Docker 版本 | （待填） |
-| Python 版本 | （待填） |
-| claude-agent-sdk 版本 | （待填） |
+| 日期 | 2026-03-17 |
+| OS | Windows 11 Pro 10.0.26200 (MINGW64/bash) |
+| Docker 版本 | （S1 不需要 Docker，S2 时填写） |
+| Python 版本 | 3.12.10 |
+| claude-agent-sdk 版本 | 0.1.48 |
+| Claude Code CLI 版本 | 2.1.63 |
 
 ---
 
@@ -23,37 +24,37 @@
 
 | 项目 | 结果 |
 | ---- | ---- |
-| 状态 | 待执行 |
-| PreToolUse 回调触发 | — |
-| block 返回后命令是否被阻止 | — |
-| 备注 | — |
+| 状态 | **PASS** ✓ |
+| PreToolUse 回调触发 | 是 — `HookMatcher(matcher="Bash")` 成功匹配，回调收到完整 `tool_input.command` |
+| block 返回后命令是否被阻止 | 是 — 返回 `{"decision": "block", "reason": "..."}` 后命令未执行 |
+| 备注 | 回调签名为 `async def(input: TypedDict, tool_use_id, context)`，`input["tool_input"]["command"]` 包含完整命令字符串。需要 `os.environ.pop("CLAUDECODE", None)` 绕过嵌套会话检测。 |
 
 ### S1.2 Resume
 
 | 项目 | 结果 |
 | ---- | ---- |
-| 状态 | 待执行 |
-| 第一次 query 返回 session_id | — |
-| 第二次 query 带 resume= 是否恢复上下文 | — |
-| 备注 | — |
+| 状态 | **PASS** ✓ |
+| 第一次 query 返回 session_id | 是 — `SystemMessage(subtype="init")` 中 `data["session_id"]` 返回 UUID |
+| 第二次 query 带 resume= 是否恢复上下文 | 是 — 传入 `ClaudeAgentOptions(resume=session_id)` 后，Agent 完整回忆出第一次对话中的 secret code |
+| 备注 | session_id 格式为 UUID（如 `2a9917c8-b197-4952-a186-cdae7bbfdcda`）。resume 后无需重新指定 `allowed_tools`，SDK 自动继承原会话配置。 |
 
 ### S1.3 MCP
 
 | 项目 | 结果 |
 | ---- | ---- |
-| 状态 | 待执行 |
-| 自定义 MCP tool 注册成功 | — |
-| Agent 调用 tool 成功 | — |
-| tool 输出正确写入文件 | — |
-| 备注 | — |
+| 状态 | **PASS** ✓ |
+| 自定义 MCP tool 注册成功 | 是 — `@tool(name, desc, json_schema_dict)` + `create_sdk_mcp_server()` 正常工作 |
+| Agent 调用 tool 成功 | 是 — Agent 自动识别并调用了 `write_file` tool，传入正确参数 |
+| tool 输出正确写入文件 | 是 — 文件内容与预期完全一致 |
+| 备注 | `input_schema` 接受 JSON Schema dict（`{"type": "object", "properties": {...}}`）。MCP 自定义 tool 需要 `ClaudeSDKClient`（不能用 `query()`）。回调签名 `async def(args: dict) -> dict`，返回 MCP 标准格式 `{"content": [{"type": "text", "text": "..."}]}`。 |
 
 ### S1 综合判定
 
 | 判定 | 值 |
 | ---- | ---- |
-| Go / No-Go | — |
-| 需要启用的替代方案 | — |
-| 对 TASKS.md 的影响 | — |
+| Go / No-Go | **GO** ✓ — 三项全部通过 |
+| 需要启用的替代方案 | 无 — 所有能力均可直接使用 |
+| 对 TASKS.md 的影响 | 无需修改。T1.9 Agent Runner 可直接使用 hooks 安全模型、resume 会话恢复、MCP IPC bridge。 |
 
 ---
 

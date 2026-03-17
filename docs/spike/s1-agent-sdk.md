@@ -1,6 +1,6 @@
 # S1: Python Agent SDK 验证
 
-> 状态：待执行
+> 状态：**已完成 — GO** ✓（2026-03-17）
 > 执行结果记录在 [findings.md](findings.md) § S1
 
 ---
@@ -52,7 +52,7 @@ from claude_agent_sdk import Agent, hooks
 
 ## 执行清单
 
-- [ ] 安装 `claude-agent-sdk` Python 包，确认版本
-- [ ] 执行 S1.1 hooks 验证 → 记录到 findings.md
-- [ ] 执行 S1.2 resume 验证 → 记录到 findings.md
-- [ ] 执行 S1.3 MCP 验证 → 记录到 findings.md
+- [x] 安装 `claude-agent-sdk` Python 包，确认版本
+- [x] 执行 S1.1 hooks 验证 → 记录到 findings.md
+- [x] 执行 S1.2 resume 验证 → 记录到 findings.md
+- [x] 执行 S1.3 MCP 验证 → 记录到 findings.md
