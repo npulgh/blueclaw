@@ -17,9 +17,20 @@
 
 ---
 
+## Phase 0 — 技术验证门禁
+
+> 在开始 Phase 1 之前，必须完成技术 Spike 并确认所有关键假设。
+> 详见 [spike/README.md](spike/README.md)，执行结果记录在 [spike/findings.md](spike/findings.md)。
+>
+> **门禁条件**：SDK hooks/resume/MCP 三项验证通过，watchdog 事件可靠性确认。
+> 来源：[多引擎综合审视](../notes/multi-engine-review.md)
+
+---
+
 ## Phase 1 — MVP（Telegram 端到端）
 
 > 目标：一条 Telegram 消息进来，Agent 在容器里处理，回复发回 Telegram。
+> **depends**: T0.1, T0.2（Spike 验证通过后方可开始）
 
 ### T1.1 项目脚手架
 
@@ -53,9 +64,12 @@
 - 启动时自动迁移（检查 schema 版本）
 - messages 表 `UNIQUE(channel, chat_id, message_id)` 幂等约束
 
+**设计修订**（来源：反脆弱引擎）：增加 SQLite 定时备份，启动时及每小时执行 `VACUUM INTO` 到备份路径，防止单文件损坏导致全部状态丢失。~10 行。
+
 **验收**：
 - 测试：建表 → 插入 → 查询 → 重复插入触发 IGNORE
 - `data/store/messages.db` 自动创建
+- 备份文件 `data/store/messages.db.bak` 自动生成
 
 **depends**: T1.2
 
@@ -80,6 +94,8 @@
 - `send_message()` 返回平台 message_id
 - `edit_message()` 用于后续流式更新
 
+**设计修订**（来源：系统思维引擎）：增加全局速率限制器（token bucket），与流式防抖协同工作，防止多 Group 并发流式更新触发 IM API 限频（Telegram 全局 30 次/秒 edit 限制）。~30 行。
+
 **验收**：
 - 配置真实 Bot Token → 启动 → 手动发消息 → 回显（echo adapter）
 - 或：aiogram mock 测试 `IncomingMessage` 解析
@@ -96,6 +112,8 @@
 - Group Queue（`asyncio.Queue(maxsize=10)`）
 - 背压：队列满时返回排队提示
 
+**设计修订**（来源：产品工程引擎）：增加 Group 静态配置加载——从 `blueclaw.config.yaml` 的 `groups:` 段读取 `chat_id → group_name` 映射并写入 DB。这是端到端链路必需的"胶水"功能，否则 Router 的 Group 查找无数据可查。~30 行。
+
 **验收**：
 - 单元测试：重复 message_id → 只处理一次
 - 单元测试：queue 满 → 返回背压信号
@@ -111,6 +129,8 @@
 - 容器端：MCP stdio server，将 tool 调用写入 outbox/
 - 支持方法：`send_message`, `stream_chunk`
 
+**设计修订**（来源：系统思维 + 反脆弱引擎）：IPC Watcher 增加 5 秒定时扫描兜底，不完全依赖 watchdog 事件通知。watchdog 在 Windows Docker Desktop (WSL2 backend) 上文件事件不可靠是已知问题，定时扫描是"事件驱动 + 轮询兜底"的双保险模式。~5 行。
+
 **验收**：
 - 手动写入 JSON 文件到 outbox → Watcher 拾取并打印
 - ipc_bridge 单元测试：tool 调用 → 生成文件
@@ -125,6 +145,8 @@
 - `asyncio.Semaphore(max_concurrent)` 并发控制
 - 超时自动 `docker kill`
 - 挂载验证：白名单/黑名单检查
+
+**设计修订**（来源：反脆弱 + Wardley 引擎）：容器运行时命令可配置——通过配置项 `container.runtime` 指定容器运行时（默认 `docker`），不硬编码 `docker` 命令，预留 Podman 替代路径。~20 行。
 
 **验收**：
 - 启动测试容器 → 运行 `echo hello` → 收到输出 → 容器自动销毁
@@ -142,6 +164,8 @@
 - PreToolUse 钩子：拦截危险 Bash 命令
 - PostToolUse 钩子：写审计日志到 `/workspace/ipc/audit/`
 
+**设计修订**（来源：反脆弱引擎）：用 `run_agent(prompt, session_id, hooks)` 函数封装所有 SDK 调用。这是未来 LLM 后端抽象的预留接口点——当前只实现 Claude 后端，但封装使得 SDK 变更只影响一个函数。凸性比从 1:100 翻转为 10:1。~10 行。
+
 **验收**：
 - `docker build` 成功
 - 手动运行容器（传入 test prompt）→ IPC outbox 中出现响应文件
@@ -155,6 +179,10 @@
 - 在 `main()` 中连接：Registry → Router → Container Manager → IPC Watcher
 - Telegram 消息 → Router → Container → Agent → IPC → Router → Telegram 回复
 
+**设计修订**（来源：产品工程引擎）：
+- 容器启动/超时/Agent 报错时，向 IM 用户返回友好错误消息（非静默失败）。~20 行。
+- 容器冷启动期间发送 typing indicator 或"正在思考..."占位消息，缓解 1-3 秒等待的用户焦虑。~5 行。
+
 **验收**：
 - 启动 Blueclaw → 给 Telegram Bot 发消息 → 收到 Agent 回复
 - 日志中可见完整消息流
@@ -163,11 +191,25 @@
 
 ---
 
-## Phase 2 — 飞书 + 流式 + 安全
+## Phase 2 — Resumable + 飞书 + 流式 + 韧性
 
-> 目标：飞书接入、流式响应、审计日志、Resumable 会话。
+> 目标：会话可恢复、飞书接入、流式响应、崩溃恢复、分层内存。
+> 优先级调整来源：[多引擎综合审视](../notes/multi-engine-review.md)
 
-### T2.1 飞书 Adapter
+### T2.1 Resumable 会话
+
+> **优先级提升**（原 T2.3）：IM 场景下多轮对话是 Day 1 基本期望，Ephemeral 模式的"失忆"会让用户困惑。T0 Spike 已验证 `resume` 机制可用后，此任务为 Phase 2 最高优先级。
+
+**文件**：`src/container_manager.py`（传 session_id），`container/agent-runner/main.py`（resume 参数），`src/db.py`（sessions 表操作）
+
+- Agent Runner 返回 session_id → 宿主存入 sessions 表
+- 下次消息：从 DB 读 session_id → 传入容器环境变量 → Agent SDK `resume=`
+
+**验收**：发两条消息（前后相隔 > 容器生命周期），第二条能引用第一条的上下文。
+
+**depends**: T1.10
+
+### T2.2 飞书 Adapter
 
 **文件**：`src/channels/feishu.py`, `tests/test_feishu.py`
 
@@ -180,7 +222,7 @@
 
 **depends**: T1.10
 
-### T2.2 流式响应
+### T2.3 流式响应
 
 **文件**：`src/ipc.py`（新增 stream_chunk 处理），`src/channels/telegram.py`（edit_message），`src/channels/feishu.py`（card update）
 
@@ -189,18 +231,7 @@
 
 **验收**：Agent 处理较长任务时，Telegram/飞书中消息实时增长更新。
 
-**depends**: T2.1
-
-### T2.3 Resumable 会话
-
-**文件**：`src/container_manager.py`（传 session_id），`container/agent-runner/main.py`（resume 参数），`src/db.py`（sessions 表操作）
-
-- Agent Runner 返回 session_id → 宿主存入 sessions 表
-- 下次消息：从 DB 读 session_id → 传入容器环境变量 → Agent SDK `resume=`
-
-**验收**：发两条消息（前后相隔 > 容器生命周期），第二条能引用第一条的上下文。
-
-**depends**: T1.10
+**depends**: T2.2
 
 ### T2.4 挂载安全验证
 
@@ -215,27 +246,48 @@
 
 **depends**: T1.8
 
-### T2.5 多 Group 支持
+### T2.5 多 Group 支持 + Token 计量
 
 **文件**：`src/router.py`（多 Group 路由），`src/db.py`（groups 表操作），CLI 或配置注册 Group
 
 - 多个 chat_id 映射不同 Group
 - 每个 Group 独立 Queue、独立 IPC 目录、独立 CLAUDE.md
 
-**验收**：两个不同 Telegram 群各有独立 Agent 上下文，互不干扰。
+**设计修订**（来源：Wardley 引擎）：增加 token 用量计量 + per-Group 预算上限。失控 Agent 循环可在 `max_turns=30` 内消耗数十美元，token 预算是成本安全的必要机制。~50 行。
+
+**验收**：
+- 两个不同 Telegram 群各有独立 Agent 上下文，互不干扰。
+- Group token 用量超出预算时，返回友好提示并拒绝新请求。
 
 **depends**: T1.10
 
-### T2.6 Webhook HTTP Server（可选模式）
+### T2.6 崩溃恢复
 
-**文件**：`src/server.py`
+> **优先级提升**（原 T3.5）：7x24 运行的 IM Bot 如果宕机后丢消息，用户信任会迅速崩塌。不应推迟到 Phase 3。
 
-- FastAPI 应用，接收 Telegram/飞书 Webhook 回调
-- 配置 `mode: webhook` 时启用，替代 Long Polling / WebSocket
+**文件**：`src/router.py`（recover_pending），`src/db.py`
 
-**验收**：配置 webhook 模式 → Telegram 设置 webhook URL → 消息正常收发。
+- 启动时扫描 status='processing' 的消息 → 重新入队
+- cursors 表记录各 Channel 最后处理的 message_id
+- 启动时清理孤儿容器（`docker ps --filter label=blueclaw`）
 
-**depends**: T2.1
+**验收**：模拟宕机（kill -9）→ 重启 → 未处理消息自动恢复。
+
+**depends**: T1.10
+
+### T2.7 分层内存系统
+
+> **优先级提升**（原 T3.4）：没有 CLAUDE.md 层级，Agent 每次启动都是"失忆"状态（即使有 Resumable，session 也会过期）。分层内存是 Agent 人格和行为的基础。
+
+**文件**：`groups/CLAUDE.md`（模板），文档说明
+
+- 全局 CLAUDE.md 模板
+- Group 级 CLAUDE.md 模板
+- Main Group 写全局、Non-Main 只读的权限检查
+
+**验收**：Main Group Agent 修改全局 CLAUDE.md → 其他 Group 下次启动能读到变更。
+
+**depends**: T2.5
 
 ---
 
@@ -256,13 +308,15 @@
 
 ### T3.2 可观测性
 
-**文件**：`src/observability.py`, `src/server.py`（/metrics 端点）
+**文件**：`src/observability.py`
 
 - structlog JSON 日志 + correlation_id
 - Prometheus 指标：7 个核心指标（见 ARCHITECTURE.md 3.9）
-- /metrics 端点
+- 用 `prometheus_client` 内置 HTTP server 暴露 /metrics（不依赖 FastAPI）
 
-**验收**：`curl /metrics` 返回 Prometheus 格式；structlog 输出包含 correlation_id。
+**设计修订**（来源：系统思维引擎）：增加 event loop lag 监控指标——这是单进程 asyncio 系统最重要的健康信号，事件循环退化会导致所有组件级联故障。~10 行。
+
+**验收**：`curl /metrics` 返回 Prometheus 格式（含 `event_loop_lag_seconds`）；structlog 输出包含 correlation_id。
 
 ### T3.3 定时任务调度
 
@@ -274,30 +328,11 @@
 
 **验收**：创建 cron 任务 → 到期时自动触发 Agent → 响应发到对应 Group。
 
-### T3.4 分层内存系统
-
-**文件**：`groups/CLAUDE.md`（模板），文档说明
-
-- 全局 CLAUDE.md 模板
-- Group 级 CLAUDE.md 模板
-- Main Group 写全局、Non-Main 只读的权限检查
-
-**验收**：Main Group Agent 修改全局 CLAUDE.md → 其他 Group 下次启动能读到变更。
-
-### T3.5 崩溃恢复
-
-**文件**：`src/router.py`（recover_pending），`src/db.py`
-
-- 启动时扫描 status='processing' 的消息 → 重新入队
-- cursors 表记录各 Channel 最后处理的 message_id
-
-**验收**：模拟宕机（kill -9）→ 重启 → 未处理消息自动恢复。
-
 ---
 
 ## Phase 4 — 扩展
 
-> 目标：Channel 插件化、多 Agent 协作、管理界面。
+> 目标：Channel 插件化、多 Agent 协作、管理界面、可选高级模式。
 
 ### T4.1 Channel 扩展接口
 
@@ -314,6 +349,17 @@
 ### T4.4 Persistent 容器模式
 
 长驻 Agent 容器 + 心跳保活 + 进程内多任务隔离。
+
+### T4.5 Webhook HTTP Server（可选模式）
+
+> **优先级下调**（原 T2.6）：长连接已覆盖主要场景（ADR-003），Webhook 增加公网暴露攻击面，仅供有特殊部署需求的用户使用。
+
+**文件**：`src/server.py`
+
+- FastAPI 应用，接收 Telegram/飞书 Webhook 回调
+- 配置 `mode: webhook` 时启用，替代 Long Polling / WebSocket
+
+**验收**：配置 webhook 模式 → Telegram 设置 webhook URL → 消息正常收发。
 
 ---
 
