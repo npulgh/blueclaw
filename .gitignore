@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Package management
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+.pyright/
+.ruff_cache/
+
+# Testing
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Distribution
+*.tar.gz
+*.whl
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data
+data/store/
+data/ipc/
+data/audit_log.jsonl
+groups/*/session/
+groups/*/files/
+
+# Logs
+*.log
+logs/
+
+# Docker
+*.dockerignore
+
+# Editor / IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SQLite
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
