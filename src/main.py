@@ -11,6 +11,7 @@ import logging
 import os
 import signal
 import sys
+from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -151,6 +152,7 @@ async def _group_consumer(
     registry: ChannelRegistry,
     stream: _StreamState,
     is_main: bool,
+    db: Database,
 ) -> None:
     """Consume messages from a group queue, spawn containers, handle errors."""
     log.info("consumer.started", group=group_name)
@@ -195,11 +197,13 @@ async def _group_consumer(
 
         # Spawn container
         try:
+            session_id = await db.get_session(group_name=group_name)
             result = await container_mgr.spawn(
                 group_name=group_name,
                 prompt=msg.text,
                 env_vars=env_vars,
                 mounts=mounts,
+                session_id=session_id,
             )
         except Exception as exc:
             log.exception("consumer.spawn_error", group=group_name)
@@ -219,6 +223,23 @@ async def _group_consumer(
                 stderr=result.stderr[:500],
             )
             await _send_error(registry, msg.channel, msg.chat_id, _ERR_CONTAINER)
+        else:
+            # Successful run — persist session_id for next turn
+            cwd = os.getcwd()
+            session_file = os.path.join(cwd, "data", "ipc", group_name, "session_id.txt")
+            try:
+                new_session_id = await asyncio.to_thread(
+                    Path(session_file).read_text, encoding="utf-8"
+                )
+                new_session_id = new_session_id.strip()
+                await asyncio.to_thread(os.unlink, session_file)
+                if new_session_id:
+                    await db.save_session(group_name=group_name, session_id=new_session_id)
+                    log.info("session.saved", group=group_name, session_id=new_session_id)
+            except FileNotFoundError:
+                pass  # agent didn't write a session_id (e.g. error path)
+            except Exception:
+                log.exception("session.read_error", group=group_name)
 
         stream.clear(group_name)
 
@@ -300,6 +321,7 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
                 registry=registry,
                 stream=stream,
                 is_main=g.is_main,
+                db=db,
             ),
             name=f"consumer-{g.name}",
         )
