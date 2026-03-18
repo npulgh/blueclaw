@@ -143,14 +143,87 @@ class MessageRouter:
             log.warning("router.backpressure", group=group_name, qsize=queue.qsize())
             return RouteResult.BACKPRESSURE
 
-        log.info(
-            "router.queued",
+        log.info("router.queued",
             group=group_name,
             channel=msg.channel,
             message_id=msg.message_id,
             qsize=queue.qsize(),
         )
         return RouteResult.QUEUED
+
+    # ------------------------------------------------------------------
+    # Crash recovery
+    # ------------------------------------------------------------------
+
+    async def recover_pending(self) -> int:
+        """Re-enqueue messages stuck in 'processing' status from a prior crash.
+
+        On a clean shutdown messages should be 'completed' or 'failed'.
+        Any message still in 'processing' was being handled when the process
+        was killed — we re-enqueue it so the consumer can retry it.
+
+        Returns:
+            Number of messages re-enqueued.
+        """
+        assert self._db is not None, "MessageRouter.init() must be called first"
+
+        stuck = await self._db.get_messages_by_status(status="processing")
+        recovered = 0
+
+        for row in stuck:
+            group_name: str = row.get("group_name") or ""
+            if not group_name or group_name not in self._queues:
+                # Try to resolve group via channel+chat_id lookup
+                group_row = await self._db.get_group_by_chat(
+                    channel=row["channel"], chat_id=row["chat_id"]
+                )
+                if group_row is None:
+                    log.warning(
+                        "router.recover.no_group",
+                        channel=row["channel"],
+                        chat_id=row["chat_id"],
+                        message_id=row["message_id"],
+                    )
+                    # Mark as failed — no group to route to
+                    await self._db.update_message_status(
+                        channel=row["channel"],
+                        chat_id=row["chat_id"],
+                        message_id=row["message_id"],
+                        status="failed",
+                    )
+                    continue
+                group_name = group_row["name"]
+
+            msg = IncomingMessage(
+                message_id=row["message_id"],
+                chat_id=row["chat_id"],
+                sender_id=row["sender_id"],
+                sender_name=row.get("sender_name") or "",
+                text=row["content"],
+                channel=row["channel"],
+                timestamp=row.get("created_at"),
+            )
+
+            queue = self._get_or_create_queue(group_name)
+            try:
+                queue.put_nowait(msg)
+                recovered += 1
+                log.info(
+                    "router.recover.requeued",
+                    group=group_name,
+                    message_id=row["message_id"],
+                )
+            except asyncio.QueueFull:
+                log.warning(
+                    "router.recover.queue_full",
+                    group=group_name,
+                    message_id=row["message_id"],
+                )
+
+        if recovered:
+            log.info("router.recover.done", recovered=recovered)
+
+        return recovered
 
     # ------------------------------------------------------------------
     # Queue access

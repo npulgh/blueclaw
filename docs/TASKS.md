@@ -194,10 +194,12 @@
 
 ---
 
-## Phase 2 — Resumable + 飞书 + 流式 + 韧性
+## Phase 2 — Resumable + 飞书 + 流式 + 韧性 ✅ COMPLETED
 
 > 目标：会话可恢复、飞书接入、流式响应、崩溃恢复、分层内存。
 > 优先级调整来源：[多引擎综合审视](../notes/multi-engine-review.md)
+>
+> **完成日期**: 2026-03-19 | **测试**: 230 passed, 2 skipped
 
 ### T2.1 Resumable 会话
 

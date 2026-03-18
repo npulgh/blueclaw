@@ -69,6 +69,7 @@ class GroupConfig:
     chat_id: str
     is_main: bool = False
     trigger: str = "@bot"
+    token_budget: int = 0  # 0 = unlimited; otherwise max tokens per calendar month
 
 
 @dataclass
@@ -183,6 +184,7 @@ def load_config(yaml_path: str | Path = "lynxclaw.config.yaml", *, dotenv_path: 
                 chat_id=str(g["chat_id"]),
                 is_main=bool(g.get("is_main", False)),
                 trigger=g.get("trigger", cfg.router.default_trigger),
+                token_budget=int(g.get("token_budget", 0)),
             )
             for g in groups_raw
             if isinstance(g, dict) and "name" in g and "channel" in g and "chat_id" in g

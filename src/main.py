@@ -7,6 +7,8 @@ Message flow: IM → Router → Container → IPC → IM reply.
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json
 import logging
 import os
 import signal
@@ -23,6 +25,7 @@ from src.config import Config, load_config
 from src.container_manager import ContainerManager
 from src.db import Database
 from src.ipc import IPCWatcher
+from src.memory import ensure_group_dirs, get_global_memory_path
 from src.router import MessageRouter, RouteResult
 from src.stream_debouncer import StreamDebouncer
 from src.types import IncomingMessage, OutgoingMessage
@@ -168,6 +171,18 @@ def _make_debounce_flush(
 _ERR_TIMEOUT = "⏱ Sorry, the agent timed out. Please try again."
 _ERR_CONTAINER = "⚠ Sorry, something went wrong while processing your message."
 _THINKING = "💭 Thinking..."
+_ERR_BUDGET = (
+    "🚫 This group has reached its monthly token budget. "
+    "No new requests will be processed until the budget resets or is increased. "
+    "Contact your administrator to raise the token_budget in the config."
+)
+
+
+def _month_start_ts() -> int:
+    """Return the Unix timestamp of the start of the current calendar month (UTC)."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    month_start = datetime.datetime(now.year, now.month, 1, tzinfo=datetime.timezone.utc)
+    return int(month_start.timestamp())
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +199,7 @@ async def _group_consumer(
     stream: _StreamState,
     is_main: bool,
     db: Database,
+    token_budget: int = 0,
 ) -> None:
     """Consume messages from a group queue, spawn containers, handle errors."""
     log.info("consumer.started", group=group_name)
@@ -196,6 +212,21 @@ async def _group_consumer(
             message_id=msg.message_id,
             sender=msg.sender_name,
         )
+
+        # --- Budget enforcement (monthly) ---
+        if token_budget > 0:
+            month_start = _month_start_ts()
+            usage = await db.get_token_usage(group_name=group_name, since=month_start)
+            total_used = usage["input_tokens"] + usage["output_tokens"]
+            if total_used >= token_budget:
+                log.warning(
+                    "consumer.budget_exceeded",
+                    group=group_name,
+                    used=total_used,
+                    budget=token_budget,
+                )
+                await _send_error(registry, msg.channel, msg.chat_id, _ERR_BUDGET)
+                continue
 
         # Track which chat this group is currently serving
         stream.begin(group_name, msg.channel, msg.chat_id)
@@ -220,11 +251,21 @@ async def _group_consumer(
         }
         if is_main:
             mounts["project_dir"] = cwd
+            # Main group gets rw access to global CLAUDE.md via a dedicated mount
+            mounts["global_memory"] = get_global_memory_path(os.path.join(cwd, "groups"))
 
         env_vars = {
             "ANTHROPIC_API_KEY": config.anthropic_api_key,
             "LYNXCLAW_CHAT_ID": msg.chat_id,
         }
+
+        # Mark message as 'processing' before spawning container
+        await db.update_message_status(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            message_id=msg.message_id,
+            status="processing",
+        )
 
         # Spawn container
         try:
@@ -237,8 +278,14 @@ async def _group_consumer(
                 is_main=is_main,
                 session_id=session_id,
             )
-        except Exception as exc:
+        except Exception:
             log.exception("consumer.spawn_error", group=group_name)
+            await db.update_message_status(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                status="failed",
+            )
             await _send_error(registry, msg.channel, msg.chat_id, _ERR_CONTAINER)
             stream.clear(group_name)
             continue
@@ -246,6 +293,12 @@ async def _group_consumer(
         # Handle container failure / timeout
         if result.timed_out:
             log.warning("consumer.timeout", group=group_name)
+            await db.update_message_status(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                status="failed",
+            )
             await _send_error(registry, msg.channel, msg.chat_id, _ERR_TIMEOUT)
         elif result.exit_code != 0:
             log.error(
@@ -254,11 +307,44 @@ async def _group_consumer(
                 exit_code=result.exit_code,
                 stderr=result.stderr[:500],
             )
+            await db.update_message_status(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                status="failed",
+            )
             await _send_error(registry, msg.channel, msg.chat_id, _ERR_CONTAINER)
         else:
-            # Successful run — persist session_id for next turn
+            # Successful run — record token usage then persist session_id
             cwd = os.getcwd()
-            session_file = os.path.join(cwd, "data", "ipc", group_name, "session_id.txt")
+            ipc_group_dir = os.path.join(cwd, "data", "ipc", group_name)
+
+            # Read and record token usage written by the agent runner
+            token_usage_file = os.path.join(ipc_group_dir, "token_usage.json")
+            try:
+                raw = await asyncio.to_thread(
+                    Path(token_usage_file).read_text, encoding="utf-8"
+                )
+                token_data = json.loads(raw)
+                await asyncio.to_thread(os.unlink, token_usage_file)
+                await db.record_token_usage(
+                    group_name=group_name,
+                    input_tokens=int(token_data.get("input_tokens", 0)),
+                    output_tokens=int(token_data.get("output_tokens", 0)),
+                )
+                log.info(
+                    "tokens.recorded",
+                    group=group_name,
+                    input=token_data.get("input_tokens", 0),
+                    output=token_data.get("output_tokens", 0),
+                )
+            except FileNotFoundError:
+                pass  # agent didn't write token_usage.json (e.g. mock/test path)
+            except Exception:
+                log.exception("tokens.read_error", group=group_name)
+
+            # Persist session_id for next turn
+            session_file = os.path.join(ipc_group_dir, "session_id.txt")
             try:
                 new_session_id = await asyncio.to_thread(
                     Path(session_file).read_text, encoding="utf-8"
@@ -272,6 +358,13 @@ async def _group_consumer(
                 pass  # agent didn't write a session_id (e.g. error path)
             except Exception:
                 log.exception("session.read_error", group=group_name)
+
+            await db.update_message_status(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                status="completed",
+            )
 
         stream.clear(group_name)
 
@@ -297,6 +390,13 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     _setup_logging(config.host.log_level)
 
     log.info("lynxclaw.starting")
+
+    # --- Seed group directories and CLAUDE.md templates ---
+    cwd = os.getcwd()
+    groups_dir = os.path.join(cwd, "groups")
+    group_names_from_config = [g.name for g in config.groups]
+    await asyncio.to_thread(ensure_group_dirs, groups_dir, group_names_from_config)
+    log.info("memory.dirs_ensured", groups=group_names_from_config)
 
     # --- Init components ---
     db = Database()
@@ -354,6 +454,12 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     group_main_map = {g.name: g.is_main for g in config.groups}
     group_names = [g.name for g in config.groups]
 
+    # --- Crash recovery: clean up orphan containers, re-enqueue stuck messages ---
+    await container_mgr.cleanup_orphans()
+    recovered = await router.recover_pending()
+    if recovered:
+        log.info("startup.recovery", recovered=recovered)
+
     # --- Start all components ---
     await registry.start_all()
     await ipc.start(groups=group_names)
@@ -371,6 +477,7 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
                 stream=stream,
                 is_main=g.is_main,
                 db=db,
+                token_budget=g.token_budget,
             ),
             name=f"consumer-{g.name}",
         )

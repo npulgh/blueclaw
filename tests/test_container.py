@@ -632,3 +632,110 @@ class TestConcurrency:
         # Semaphore should be back to 1 (not stuck at 0)
         assert m._semaphore is not None
         assert m._semaphore._value == 1
+
+
+# ---------------------------------------------------------------------------
+# cleanup_orphans — T2.6 crash recovery
+# ---------------------------------------------------------------------------
+
+class TestCleanupOrphans:
+    @pytest.mark.asyncio
+    async def test_cleanup_kills_found_containers(self):
+        """When docker ps returns container IDs, each is killed."""
+        m = _make_manager()
+
+        ps_proc = MagicMock()
+        ps_proc.communicate = AsyncMock(return_value=(b"abc123\ndef456\n", b""))
+
+        kill_proc = MagicMock()
+        kill_proc.wait = AsyncMock(return_value=None)
+
+        calls = []
+
+        async def fake_exec(*args, **kwargs):
+            calls.append(args)
+            if args[1] == "ps":
+                return ps_proc
+            return kill_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            killed = await m.cleanup_orphans()
+
+        assert killed == 2
+        # First call: docker ps --filter label=lynxclaw -q
+        assert calls[0][1] == "ps"
+        assert "--filter" in calls[0]
+        assert "label=lynxclaw" in calls[0]
+        # Remaining calls: docker kill <id>
+        kill_ids = [c[2] for c in calls[1:]]
+        assert "abc123" in kill_ids
+        assert "def456" in kill_ids
+
+    @pytest.mark.asyncio
+    async def test_cleanup_returns_zero_when_no_containers(self):
+        """When docker ps returns nothing, cleanup_orphans returns 0."""
+        m = _make_manager()
+
+        ps_proc = MagicMock()
+        ps_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=ps_proc):
+            killed = await m.cleanup_orphans()
+
+        assert killed == 0
+
+    @pytest.mark.asyncio
+    async def test_cleanup_is_best_effort_on_list_failure(self):
+        """If docker ps fails, cleanup_orphans returns 0 without raising."""
+        m = _make_manager()
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=OSError("docker not found"),
+        ):
+            killed = await m.cleanup_orphans()
+
+        assert killed == 0
+
+    @pytest.mark.asyncio
+    async def test_cleanup_continues_after_individual_kill_failure(self):
+        """If killing one container fails, the rest are still attempted."""
+        m = _make_manager()
+
+        ps_proc = MagicMock()
+        ps_proc.communicate = AsyncMock(return_value=(b"aaa\nbbb\n", b""))
+
+        good_kill = MagicMock()
+        good_kill.wait = AsyncMock(return_value=None)
+
+        call_count = 0
+
+        async def fake_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if args[1] == "ps":
+                return ps_proc
+            if call_count == 2:
+                raise OSError("kill failed")
+            return good_kill
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            killed = await m.cleanup_orphans()
+
+        # One kill succeeded, one failed — should still report 1 killed
+        assert killed == 1
+
+    @pytest.mark.asyncio
+    async def test_cleanup_before_init_returns_zero(self):
+        """cleanup_orphans is a no-op (returns 0) when init() has not been called."""
+        m = ContainerManager()  # no init()
+        killed = await m.cleanup_orphans()
+        assert killed == 0
+
+    def test_build_command_includes_lynxclaw_label(self):
+        """_build_command must include --label lynxclaw for orphan detection."""
+        m = _make_manager()
+        cmd = m._build_command(group_name="g", env_vars={}, mounts={}, session_id="s")
+        assert "--label" in cmd
+        idx = cmd.index("--label")
+        assert cmd[idx + 1] == "lynxclaw"

@@ -230,3 +230,119 @@ async def test_reinit_does_not_lose_groups(db: Database):
     row = await db.get_group_by_chat(channel="telegram", chat_id="-1001111111111")
     assert row is not None
     assert row["name"] == "test-group"
+
+
+# ---------------------------------------------------------------------------
+# recover_pending tests (T2.6)
+# ---------------------------------------------------------------------------
+
+async def test_recover_pending_requeues_processing_messages(db: Database):
+    """Messages with status='processing' are re-enqueued on recovery."""
+    cfg = _make_config()
+    r = MessageRouter()
+    await r.init(db, cfg)
+
+    # Simulate a message that was stuck in 'processing' at crash time
+    await db.insert_message(
+        channel="telegram",
+        chat_id="-1001111111111",
+        message_id="crash-msg-1",
+        sender_id="user1",
+        sender_name="Test User",
+        content="@bot hello",
+        direction="inbound",
+        status="processing",
+    )
+
+    count = await r.recover_pending()
+
+    assert count == 1
+    assert r.queue_size("test-group") == 1
+
+    recovered_msg = await r.get_next("test-group")
+    assert recovered_msg.message_id == "crash-msg-1"
+    assert recovered_msg.text == "@bot hello"
+
+
+async def test_recover_pending_returns_zero_when_nothing_stuck(db: Database):
+    """recover_pending returns 0 when there are no 'processing' messages."""
+    cfg = _make_config()
+    r = MessageRouter()
+    await r.init(db, cfg)
+
+    count = await r.recover_pending()
+
+    assert count == 0
+    assert r.queue_size("test-group") == 0
+
+
+async def test_recover_pending_ignores_completed_messages(db: Database):
+    """Messages with status='completed' are not re-enqueued."""
+    cfg = _make_config()
+    r = MessageRouter()
+    await r.init(db, cfg)
+
+    await db.insert_message(
+        channel="telegram",
+        chat_id="-1001111111111",
+        message_id="done-msg-1",
+        sender_id="user1",
+        content="@bot done",
+        direction="inbound",
+        status="completed",
+    )
+
+    count = await r.recover_pending()
+
+    assert count == 0
+    assert r.queue_size("test-group") == 0
+
+
+async def test_recover_pending_multiple_messages(db: Database):
+    """Multiple stuck messages are all re-enqueued."""
+    cfg = _make_config(queue_max=20)
+    r = MessageRouter()
+    await r.init(db, cfg)
+
+    for i in range(3):
+        await db.insert_message(
+            channel="telegram",
+            chat_id="-1001111111111",
+            message_id=f"crash-{i}",
+            sender_id="user1",
+            content=f"@bot msg {i}",
+            direction="inbound",
+            status="processing",
+        )
+
+    count = await r.recover_pending()
+
+    assert count == 3
+    assert r.queue_size("test-group") == 3
+
+
+async def test_recover_pending_marks_failed_when_no_group(db: Database):
+    """A stuck message for an unknown chat_id is marked 'failed' (not re-enqueued)."""
+    cfg = _make_config()
+    r = MessageRouter()
+    await r.init(db, cfg)
+
+    await db.insert_message(
+        channel="telegram",
+        chat_id="-9999999999",   # no group registered for this chat
+        message_id="orphan-msg",
+        sender_id="user1",
+        content="hello",
+        direction="inbound",
+        status="processing",
+    )
+
+    count = await r.recover_pending()
+
+    assert count == 0
+    # Message should now be 'failed'
+    row = await db.get_message(
+        channel="telegram", chat_id="-9999999999", message_id="orphan-msg"
+    )
+    assert row is not None
+    assert row["status"] == "failed"

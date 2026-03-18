@@ -23,6 +23,7 @@ from src.config import (
 )
 from src.container_manager import ContainerResult
 from src.main import (
+    _ERR_BUDGET,
     _ERR_CONTAINER,
     _ERR_TIMEOUT,
     _THINKING,
@@ -87,6 +88,7 @@ def _mock_db() -> MagicMock:
     db = MagicMock()
     db.get_session = AsyncMock(return_value=None)
     db.save_session = AsyncMock()
+    db.update_message_status = AsyncMock()
     return db
 
 
@@ -706,9 +708,11 @@ class TestMainLifecycle:
 
             router_inst = MockRouter.return_value
             router_inst.init = AsyncMock()
+            router_inst.recover_pending = AsyncMock(return_value=0)
 
             cm_inst = MockCM.return_value
             cm_inst.init = MagicMock()
+            cm_inst.cleanup_orphans = AsyncMock(return_value=0)
 
             ipc_inst = MockIPC.return_value
             ipc_inst.init = AsyncMock()
@@ -860,3 +864,240 @@ class TestSessionFlow:
         )
         # File should be cleaned up
         assert not (ipc_group_dir / "session_id.txt").exists()
+
+
+# ---------------------------------------------------------------------------
+# Token budget enforcement tests (T2.5)
+# ---------------------------------------------------------------------------
+
+class TestBudgetEnforcement:
+    @pytest.mark.asyncio
+    async def test_budget_exceeded_sends_rejection_and_skips_spawn(self):
+        """When token usage >= budget, send rejection message and do NOT spawn container."""
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        config = _make_config()
+
+        router = MagicMock()
+        call_count = 0
+
+        async def fake_get_next(group):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_msg()
+            await asyncio.sleep(999)
+
+        router.get_next = AsyncMock(side_effect=fake_get_next)
+
+        container_mgr = MagicMock()
+        container_mgr.spawn = AsyncMock(
+            return_value=ContainerResult(stdout="ok", stderr="", exit_code=0)
+        )
+
+        db = _mock_db()
+        # Simulate 900 tokens already used against a budget of 500
+        db.get_token_usage = AsyncMock(
+            return_value={"input_tokens": 600, "output_tokens": 300}
+        )
+
+        task = asyncio.create_task(
+            _group_consumer(
+                "test-group",
+                config=config,
+                router=router,
+                container_mgr=container_mgr,
+                registry=reg,
+                stream=stream,
+                is_main=False,
+                db=db,
+                token_budget=500,  # budget of 500 total tokens
+            )
+        )
+
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Container must NOT have been spawned
+        container_mgr.spawn.assert_not_awaited()
+
+        # Rejection message must have been sent
+        calls = adapter.send_message.call_args_list
+        assert len(calls) == 1
+        assert calls[0][0][1].text == _ERR_BUDGET
+
+    @pytest.mark.asyncio
+    async def test_budget_zero_means_unlimited(self):
+        """When token_budget=0, no budget check is performed and spawn happens normally."""
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        config = _make_config()
+
+        router = MagicMock()
+        call_count = 0
+
+        async def fake_get_next(group):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_msg()
+            await asyncio.sleep(999)
+
+        router.get_next = AsyncMock(side_effect=fake_get_next)
+
+        container_mgr = MagicMock()
+        container_mgr.spawn = AsyncMock(
+            return_value=ContainerResult(stdout="ok", stderr="", exit_code=0)
+        )
+
+        db = _mock_db()
+        # Even with huge usage, budget=0 means unlimited
+        db.get_token_usage = AsyncMock(
+            return_value={"input_tokens": 999999, "output_tokens": 999999}
+        )
+
+        task = asyncio.create_task(
+            _group_consumer(
+                "test-group",
+                config=config,
+                router=router,
+                container_mgr=container_mgr,
+                registry=reg,
+                stream=stream,
+                is_main=False,
+                db=db,
+                token_budget=0,  # unlimited
+            )
+        )
+
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Spawn must have been called — budget check skipped
+        container_mgr.spawn.assert_awaited_once()
+        # get_token_usage must NOT have been called (no budget check)
+        db.get_token_usage.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_budget_not_exceeded_allows_spawn(self):
+        """When token usage < budget, spawn proceeds normally."""
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        config = _make_config()
+
+        router = MagicMock()
+        call_count = 0
+
+        async def fake_get_next(group):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_msg()
+            await asyncio.sleep(999)
+
+        router.get_next = AsyncMock(side_effect=fake_get_next)
+
+        container_mgr = MagicMock()
+        container_mgr.spawn = AsyncMock(
+            return_value=ContainerResult(stdout="ok", stderr="", exit_code=0)
+        )
+
+        db = _mock_db()
+        # Only 100 tokens used against a 500-token budget
+        db.get_token_usage = AsyncMock(
+            return_value={"input_tokens": 60, "output_tokens": 40}
+        )
+
+        task = asyncio.create_task(
+            _group_consumer(
+                "test-group",
+                config=config,
+                router=router,
+                container_mgr=container_mgr,
+                registry=reg,
+                stream=stream,
+                is_main=False,
+                db=db,
+                token_budget=500,
+            )
+        )
+
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Spawn must have been called — budget not exceeded
+        container_mgr.spawn.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_token_usage_recorded_after_successful_spawn(self, tmp_path):
+        """After a successful container run, token usage from token_usage.json is recorded to DB."""
+        import json as _json
+
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        config = _make_config()
+
+        router = MagicMock()
+        call_count = 0
+
+        async def fake_get_next(group):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_msg()
+            await asyncio.sleep(999)
+
+        router.get_next = AsyncMock(side_effect=fake_get_next)
+
+        # Write token_usage.json that the consumer will read
+        ipc_group_dir = tmp_path / "data" / "ipc" / "test-group"
+        ipc_group_dir.mkdir(parents=True)
+        (ipc_group_dir / "token_usage.json").write_text(
+            _json.dumps({"input_tokens": 123, "output_tokens": 456}),
+            encoding="utf-8",
+        )
+
+        container_mgr = MagicMock()
+        container_mgr.spawn = AsyncMock(
+            return_value=ContainerResult(stdout="ok", stderr="", exit_code=0)
+        )
+
+        db = _mock_db()
+        db.record_token_usage = AsyncMock()
+        db.get_token_usage = AsyncMock(return_value={"input_tokens": 0, "output_tokens": 0})
+
+        with patch("src.main.os.getcwd", return_value=str(tmp_path)):
+            task = asyncio.create_task(
+                _group_consumer(
+                    "test-group",
+                    config=config,
+                    router=router,
+                    container_mgr=container_mgr,
+                    registry=reg,
+                    stream=stream,
+                    is_main=False,
+                    db=db,
+                    token_budget=0,
+                )
+            )
+
+            await asyncio.sleep(0.1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        db.record_token_usage.assert_awaited_once_with(
+            group_name="test-group", input_tokens=123, output_tokens=456
+        )
+        # File should be cleaned up
+        assert not (ipc_group_dir / "token_usage.json").exists()

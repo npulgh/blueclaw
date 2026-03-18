@@ -115,7 +115,9 @@ class ContainerManager:
                 as env var ``LYNXCLAW_PROMPT``; the agent runner reads it).
             env_vars: Additional environment variables to inject.
             mounts: Host paths for named mount points.  Recognised keys:
-                ``group_dir``, ``global_dir``, ``project_dir``, ``ipc_dir``.
+                ``group_dir``, ``global_dir``, ``project_dir``, ``ipc_dir``,
+                ``global_memory`` (main groups only — path to global CLAUDE.md,
+                mounted :rw so the main agent can update shared memory).
             is_main: Whether this group is the main group.  Non-main groups have
                 ``group_dir`` forced to read-only in the generated command.
             session_id: Optional session ID for resumable mode.
@@ -160,6 +162,58 @@ class ContainerManager:
             )
             return await self._run(cmd, group_name=group_name, session_id=sid)
 
+    async def cleanup_orphans(self) -> int:
+        """Kill any containers left running from a previous crash.
+
+        Finds containers with the ``lynxclaw`` label via
+        ``docker ps --filter label=lynxclaw -q`` and kills each one.
+        This is best-effort: errors are logged but never propagate, so a
+        failed cleanup never prevents startup.
+
+        Returns:
+            Number of containers killed (0 if none found or on error).
+        """
+        if self._config is None:
+            return 0
+
+        runtime = self._config.runtime
+        killed = 0
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                runtime, "ps", "--filter", "label=lynxclaw", "-q",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout_bytes, _ = await proc.communicate()
+            container_ids = stdout_bytes.decode("utf-8", errors="replace").split()
+            container_ids = [c.strip() for c in container_ids if c.strip()]
+        except Exception as exc:
+            log.warning("container.cleanup_orphans.list_failed", error=str(exc))
+            return 0
+
+        for cid in container_ids:
+            try:
+                kill_proc = await asyncio.create_subprocess_exec(
+                    runtime, "kill", cid,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await kill_proc.wait()
+                killed += 1
+                log.info("container.cleanup_orphans.killed", container_id=cid)
+            except Exception as exc:
+                log.warning(
+                    "container.cleanup_orphans.kill_failed",
+                    container_id=cid,
+                    error=str(exc),
+                )
+
+        if killed:
+            log.info("container.cleanup_orphans.done", killed=killed)
+
+        return killed
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -183,6 +237,8 @@ class ContainerManager:
             group_name: Logical group name.
             env_vars: Environment variables to pass with ``-e KEY=VALUE``.
             mounts: Named mount paths (see :meth:`spawn` for keys).
+                Main groups may include ``global_memory`` for rw access to
+                the global CLAUDE.md file.
             session_id: Session identifier string.
             is_main: Whether this is the main group.  When ``False``, the
                 ``group_dir`` mount is forced to ``:ro`` (read-only) so that
@@ -197,6 +253,8 @@ class ContainerManager:
 
         cmd: list[str] = [
             cfg.runtime, "run", "--rm",
+            # Label for orphan detection on restart
+            "--label", "lynxclaw",
             # Capabilities
             "--cap-drop", "ALL",
             # Privilege escalation prevention
@@ -220,14 +278,22 @@ class ContainerManager:
         # For non-main groups, group_dir is forced to :ro to prevent filesystem
         # writes outside the IPC directory.  ipc_dir always stays :rw so the
         # agent can write outbox / inbox files.
+        #
+        # global_dir is always :ro so non-main agents cannot modify global memory.
+        # Main groups get an additional global_memory mount pointing to the global
+        # CLAUDE.md file with :rw so they can update shared knowledge.
         _group_dir_mode = "rw" if is_main else "ro"
         _mount_map = {
-            "group_dir":   f"/workspace/group:{_group_dir_mode}",
-            "global_dir":  "/workspace/global:ro",
-            "project_dir": "/workspace/project:ro",
-            "ipc_dir":     "/workspace/ipc:rw",
+            "group_dir":      f"/workspace/group:{_group_dir_mode}",
+            "global_dir":     "/workspace/global:ro",
+            "project_dir":    "/workspace/project:ro",
+            "ipc_dir":        "/workspace/ipc:rw",
+            "global_memory":  "/workspace/global_memory:rw",
         }
         for key, container_path in _mount_map.items():
+            # global_memory is only added for main groups
+            if key == "global_memory" and not is_main:
+                continue
             host_path = mounts.get(key)
             if host_path:
                 cmd += ["-v", f"{host_path}:{container_path}"]
