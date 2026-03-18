@@ -16,6 +16,7 @@ from typing import Optional
 
 import structlog
 
+from src.channels.feishu import FeishuAdapter
 from src.channels.registry import ChannelRegistry
 from src.channels.telegram import TelegramAdapter
 from src.config import Config, load_config
@@ -275,6 +276,11 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
         tg = TelegramAdapter()
         await tg.init(config.telegram)
         registry.register("telegram", tg)
+
+    if config.feishu.enabled:
+        feishu = FeishuAdapter()
+        await feishu.init(config.feishu)
+        registry.register("feishu", feishu)
 
     router = MessageRouter()
     await router.init(db, config)
