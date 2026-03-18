@@ -32,6 +32,9 @@ import structlog
 
 from src.config import ContainerConfig, SecurityConfig
 
+# Proxy volume name must match the one declared in src/proxy.py
+_PROXY_VOLUME_NAME = "lynxclaw_proxy_vol"
+
 log = structlog.get_logger(__name__)
 
 
@@ -251,6 +254,12 @@ class ContainerManager:
         cfg = self._config
         assert cfg is not None  # satisfied after init()
 
+        # When network mode is "proxy", the agent container still uses --network
+        # none (fully isolated), but we mount the proxy volume so it can reach
+        # the sidecar via HTTP_PROXY pointing at the Unix Socket.
+        _use_proxy_network = cfg.network == "proxy"
+        _docker_network = "none" if _use_proxy_network else cfg.network
+
         cmd: list[str] = [
             cfg.runtime, "run", "--rm",
             # Label for orphan detection on restart
@@ -267,8 +276,8 @@ class ContainerManager:
             "--pids-limit", "256",
             # Non-root user
             "--user", "1000:1000",
-            # Network isolation (overridable via config)
-            "--network", cfg.network,
+            # Network isolation (agent is always --network none; proxy handles egress)
+            "--network", _docker_network,
             # Resource limits
             "--memory", cfg.memory,
             "--cpus", str(cfg.cpus),
@@ -298,12 +307,23 @@ class ContainerManager:
             if host_path:
                 cmd += ["-v", f"{host_path}:{container_path}"]
 
+        # Proxy network: attach the shared proxy volume so the agent can reach
+        # the proxy sidecar via the Unix Socket.
+        if _use_proxy_network:
+            cmd += ["-v", f"{_PROXY_VOLUME_NAME}:/proxy:rw"]
+
         # Environment variables
         # Lynxclaw-specific vars added first (can be overridden by caller)
         builtin_env = {
             "LYNXCLAW_GROUP": group_name,
             "LYNXCLAW_SESSION_ID": session_id,
         }
+        # When proxy mode is active, tell the agent to route all HTTP/HTTPS
+        # traffic through the Unix Socket proxy sidecar.
+        if _use_proxy_network:
+            builtin_env["HTTP_PROXY"] = "http+unix:///proxy/proxy.sock"
+            builtin_env["HTTPS_PROXY"] = "http+unix:///proxy/proxy.sock"
+
         for k, v in {**builtin_env, **env_vars}.items():
             cmd += ["-e", f"{k}={v}"]
 
