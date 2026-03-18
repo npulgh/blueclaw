@@ -103,6 +103,7 @@ class ContainerManager:
         env_vars: dict[str, str],
         mounts: dict[str, str],
         *,
+        is_main: bool = False,
         session_id: Optional[str] = None,
         extra_cmd: Optional[list[str]] = None,
     ) -> ContainerResult:
@@ -115,6 +116,8 @@ class ContainerManager:
             env_vars: Additional environment variables to inject.
             mounts: Host paths for named mount points.  Recognised keys:
                 ``group_dir``, ``global_dir``, ``project_dir``, ``ipc_dir``.
+            is_main: Whether this group is the main group.  Non-main groups have
+                ``group_dir`` forced to read-only in the generated command.
             session_id: Optional session ID for resumable mode.
             extra_cmd: Optional command override appended after the image name
                 (useful in tests, e.g. ``["echo", "hello"]``).
@@ -137,6 +140,7 @@ class ContainerManager:
             group_name=group_name,
             env_vars={**env_vars, "LYNXCLAW_PROMPT": prompt},
             mounts=mounts,
+            is_main=is_main,
             session_id=sid,
             extra_cmd=extra_cmd,
         )
@@ -167,6 +171,7 @@ class ContainerManager:
         env_vars: dict[str, str],
         mounts: dict[str, str],
         session_id: str,
+        is_main: bool = False,
         extra_cmd: Optional[list[str]] = None,
     ) -> list[str]:
         """Build the full ``docker run`` command as a list of strings.
@@ -179,6 +184,9 @@ class ContainerManager:
             env_vars: Environment variables to pass with ``-e KEY=VALUE``.
             mounts: Named mount paths (see :meth:`spawn` for keys).
             session_id: Session identifier string.
+            is_main: Whether this is the main group.  When ``False``, the
+                ``group_dir`` mount is forced to ``:ro`` (read-only) so that
+                non-main agents cannot write outside their IPC directory.
             extra_cmd: Optional list of arguments appended after the image name.
 
         Returns:
@@ -208,9 +216,13 @@ class ContainerManager:
             "--cpus", str(cfg.cpus),
         ]
 
-        # Volume mounts — only attach mounts whose host paths are provided
+        # Volume mounts — only attach mounts whose host paths are provided.
+        # For non-main groups, group_dir is forced to :ro to prevent filesystem
+        # writes outside the IPC directory.  ipc_dir always stays :rw so the
+        # agent can write outbox / inbox files.
+        _group_dir_mode = "rw" if is_main else "ro"
         _mount_map = {
-            "group_dir":   "/workspace/group:rw",
+            "group_dir":   f"/workspace/group:{_group_dir_mode}",
             "global_dir":  "/workspace/global:ro",
             "project_dir": "/workspace/project:ro",
             "ipc_dir":     "/workspace/ipc:rw",
@@ -239,25 +251,30 @@ class ContainerManager:
         return cmd
 
     def _validate_mounts(self, mounts: dict[str, str]) -> None:
-        """Raise :class:`MountValidationError` if any path matches a blocked pattern.
+        """Raise :class:`MountValidationError` if any path is unsafe or blocked.
 
-        Checks each path component against the security blocked_patterns list,
-        using :func:`fnmatch.fnmatch` for glob-style patterns (e.g. ``*.pem``).
+        Performs three layers of validation for each mount path:
+
+        1. **Path traversal**: Rejects any path containing ``..`` components,
+           which could escape the intended directory tree.
+        2. **Blocked patterns**: Checks each path component against the
+           security ``blocked_patterns`` list using :func:`fnmatch.fnmatch`
+           for glob-style patterns (e.g. ``*.pem``).
+        3. **Symlink resolution**: Resolves symlinks via :meth:`pathlib.Path.resolve`
+           then re-runs blocked-pattern validation on the resolved path's
+           components, preventing symlink-based bypasses.
 
         Args:
             mounts: Dict of mount name → host path.
 
         Raises:
-            MountValidationError: On the first blocked pattern match found.
+            MountValidationError: On the first unsafe or blocked path found.
         """
         assert self._security is not None  # satisfied after init()
         blocked = self._security.blocked_patterns
 
-        for mount_key, host_path in mounts.items():
-            if not host_path:
-                continue
-            path = Path(host_path)
-            # Check every component of the path against blocked patterns
+        def _check_components(mount_key: str, host_path: str, path: Path) -> None:
+            """Check each component of *path* against blocked patterns."""
             for part in path.parts:
                 for pattern in blocked:
                     if fnmatch.fnmatch(part, pattern):
@@ -265,6 +282,35 @@ class ContainerManager:
                             f"Mount '{mount_key}' path '{host_path}' contains "
                             f"blocked pattern '{pattern}' (matched part: '{part}')"
                         )
+
+        for mount_key, host_path in mounts.items():
+            if not host_path:
+                continue
+
+            path = Path(host_path)
+
+            # --- 1. Path traversal detection ---
+            # Reject any path that contains ".." regardless of position.
+            # This catches both "../../etc/passwd" and "/data/../../../etc/passwd".
+            for part in path.parts:
+                if part == "..":
+                    raise MountValidationError(
+                        f"Mount '{mount_key}' path '{host_path}' contains a "
+                        "path traversal component ('..') which is not allowed"
+                    )
+
+            # --- 2. Blocked-pattern check on the raw (unresolved) path ---
+            _check_components(mount_key, host_path, path)
+
+            # --- 3. Symlink resolution + re-validation ---
+            # Only resolve if the path actually exists on disk; non-existent
+            # paths are skipped (they will fail at container launch instead).
+            if path.exists():
+                resolved = path.resolve()
+                # Re-run blocked pattern check on the resolved path to catch
+                # symlinks that point into blocked directories (e.g. a symlink
+                # named "workspace" that points to /home/user/.ssh).
+                _check_components(mount_key, host_path, resolved)
 
     async def _run(
         self,
