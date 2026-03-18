@@ -151,7 +151,7 @@ class TestRunAgent:
             sdk_mock = sys.modules["claude_agent_sdk"]
             sdk_mock.query = fake_query
 
-            text, session_id = asyncio.run(
+            text, session_id, _in, _out = asyncio.run(
                 runner.run_agent("test prompt", "", {}, "fake-key")
             )
         assert "Hello from agent" in text
@@ -168,7 +168,7 @@ class TestRunAgent:
             sdk_mock = sys.modules["claude_agent_sdk"]
             sdk_mock.query = fake_query
 
-            text, session_id = asyncio.run(
+            text, session_id, _in, _out = asyncio.run(
                 runner.run_agent("test", "", {}, "fake-key")
             )
         assert text == ""
@@ -192,7 +192,7 @@ class TestRunAgent:
             sdk_mock = sys.modules["claude_agent_sdk"]
             sdk_mock.query = fake_query
 
-            text, session_id = asyncio.run(
+            text, session_id, _in, _out = asyncio.run(
                 runner.run_agent("test", "", {}, "fake-key")
             )
         assert session_id == "2a9917c8-b197-4952-a186-cdae7bbfdcda"

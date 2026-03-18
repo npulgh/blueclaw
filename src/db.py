@@ -13,7 +13,7 @@ from typing import Any, Optional
 import aiosqlite
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -79,6 +79,15 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
   input_summary TEXT,
   blocked       INTEGER DEFAULT 0,
   created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS token_usage (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_name    TEXT NOT NULL,
+  input_tokens  INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  FOREIGN KEY (group_name) REFERENCES groups(name)
 );
 """
 
@@ -261,3 +270,108 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
         return row[0] if row else None
+
+    # ------------------------------------------------------------------
+    # cursors helpers
+    # ------------------------------------------------------------------
+
+    async def update_cursor(
+        self, *, channel: str, chat_id: str, last_msg_id: str
+    ) -> None:
+        """Upsert the last processed message_id for a channel+chat_id pair."""
+        ts = int(time.time())
+        await self._conn.execute(
+            """
+            INSERT INTO cursors (channel, chat_id, last_msg_id, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(channel, chat_id) DO UPDATE SET
+              last_msg_id=excluded.last_msg_id,
+              updated_at=excluded.updated_at
+            """,
+            (channel, chat_id, last_msg_id, ts),
+        )
+        await self._conn.commit()
+
+    async def get_cursor(self, *, channel: str, chat_id: str) -> Optional[str]:
+        """Return the last processed message_id for a channel+chat_id, or None."""
+        async with self._conn.execute(
+            "SELECT last_msg_id FROM cursors WHERE channel=? AND chat_id=?",
+            (channel, chat_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else None
+
+    # ------------------------------------------------------------------
+    # Recovery helpers
+    # ------------------------------------------------------------------
+
+    async def get_messages_by_status(
+        self, *, status: str
+    ) -> list[dict[str, Any]]:
+        """Return all messages with the given status."""
+        async with self._conn.execute(
+            "SELECT * FROM messages WHERE status=?",
+            (status,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # token_usage helpers
+    # ------------------------------------------------------------------
+
+    async def record_token_usage(
+        self,
+        *,
+        group_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        created_at: Optional[int] = None,
+    ) -> None:
+        """Insert a token usage row for the given group."""
+        ts = created_at if created_at is not None else int(time.time())
+        await self._conn.execute(
+            """
+            INSERT INTO token_usage (group_name, input_tokens, output_tokens, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (group_name, input_tokens, output_tokens, ts),
+        )
+        await self._conn.commit()
+
+    async def get_token_usage(
+        self,
+        *,
+        group_name: str,
+        since: Optional[int] = None,
+    ) -> dict[str, int]:
+        """Return summed token usage for a group.
+
+        Args:
+            group_name: Group to query.
+            since: Optional Unix timestamp; only include rows with created_at >= since.
+
+        Returns:
+            Dict with keys ``input_tokens`` and ``output_tokens`` (both ints).
+        """
+        if since is not None:
+            sql = """
+                SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+                FROM token_usage
+                WHERE group_name=? AND created_at >= ?
+            """
+            params = (group_name, since)
+        else:
+            sql = """
+                SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+                FROM token_usage
+                WHERE group_name=?
+            """
+            params = (group_name,)
+
+        async with self._conn.execute(sql, params) as cur:
+            row = await cur.fetchone()
+        return {
+            "input_tokens": row[0] if row else 0,
+            "output_tokens": row[1] if row else 0,
+        }

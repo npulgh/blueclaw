@@ -91,8 +91,8 @@ async def run_agent(
     *,
     stream_cb: "AsyncIterator[tuple[str, bool]] | None" = None,
     on_chunk: "Any | None" = None,
-) -> tuple[str, str]:
-    """Run the Claude Agent SDK and return (response_text, new_session_id).
+) -> tuple[str, str, int, int]:
+    """Run the Claude Agent SDK and return (response_text, new_session_id, input_tokens, output_tokens).
 
     This is the single point of SDK interaction. Changing the backend
     (e.g., swapping SDK versions or providers) only requires editing here.
@@ -108,7 +108,7 @@ async def run_agent(
                   final send_message call is skipped.
 
     Returns:
-        Tuple of (agent's final text response, session_id from this run).
+        Tuple of (agent's final text response, session_id, input_tokens, output_tokens).
     """
     from claude_agent_sdk import ClaudeAgentOptions, query  # type: ignore
 
@@ -123,6 +123,8 @@ async def run_agent(
     response_parts: list[str] = []
     captured_session_id: str = session_id
     last_text_index: int = -1  # tracks which response_parts index was last emitted
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
 
     async for event in query(prompt=prompt, options=options):
         # Capture session_id from SDK init event
@@ -134,6 +136,14 @@ async def run_agent(
             and "session_id" in event.data
         ):
             captured_session_id = event.data["session_id"]
+
+        # Collect token usage from usage events
+        if hasattr(event, "usage") and event.usage is not None:
+            usage = event.usage
+            if hasattr(usage, "input_tokens") and usage.input_tokens is not None:
+                total_input_tokens += int(usage.input_tokens)
+            if hasattr(usage, "output_tokens") and usage.output_tokens is not None:
+                total_output_tokens += int(usage.output_tokens)
 
         # Collect text from assistant messages
         if hasattr(event, "content"):
@@ -155,7 +165,7 @@ async def run_agent(
         # No text was produced; still signal is_final so the host cleans up
         await on_chunk("", True)
 
-    return full_text, captured_session_id
+    return full_text, captured_session_id, total_input_tokens, total_output_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -228,17 +238,26 @@ async def main() -> None:
                     ipc_base=ipc_base,
                 )
 
-            response, new_session_id = await run_agent(
+            response, new_session_id, input_tokens, output_tokens = await run_agent(
                 prompt, session_id, hooks, api_key, on_chunk=on_chunk
             )
             log.info("agent done (streaming)", chars=len(response))
         else:
             # Non-streaming path: collect full response, then send_message
-            response, new_session_id = await run_agent(
+            response, new_session_id, input_tokens, output_tokens = await run_agent(
                 prompt, session_id, hooks, api_key
             )
             send_message(group=group, chat_id=chat_id, text=response, ipc_base=ipc_base)
             log.info("agent done", chars=len(response))
+
+        # Write token usage so the host can record it to the DB
+        token_usage_file = Path(ipc_base) / group / "token_usage.json"
+        token_usage_file.parent.mkdir(parents=True, exist_ok=True)
+        token_usage_file.write_text(
+            json.dumps({"input_tokens": input_tokens, "output_tokens": output_tokens}),
+            encoding="utf-8",
+        )
+        log.info("token_usage written", input=input_tokens, output=output_tokens)
 
         # Write session_id so the host can persist it for the next turn
         if new_session_id:
