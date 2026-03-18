@@ -12,7 +12,7 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Coroutine, Optional
 
 import structlog
 
@@ -24,6 +24,7 @@ from src.container_manager import ContainerManager
 from src.db import Database
 from src.ipc import IPCWatcher
 from src.router import MessageRouter, RouteResult
+from src.stream_debouncer import StreamDebouncer
 from src.types import IncomingMessage, OutgoingMessage
 
 log = structlog.get_logger(__name__)
@@ -86,6 +87,7 @@ async def _ipc_dispatch(
     *,
     registry: ChannelRegistry,
     stream: _StreamState,
+    debouncer: StreamDebouncer,
 ) -> None:
     """Handle IPC messages from containers and deliver to IM."""
     group = params.get("group", "")
@@ -110,25 +112,53 @@ async def _ipc_dispatch(
     elif method == "stream_chunk":
         chunk = params.get("text", "")
         is_final = params.get("is_final", False)
+        # Delegate to debouncer; the flush callback handles send/edit
+        await debouncer.add_chunk(group, chunk, is_final)
 
-        buf = stream.stream_buffer.get(group, "")
-        buf += chunk
-        stream.stream_buffer[group] = buf
+
+def _make_debounce_flush(
+    registry: ChannelRegistry,
+    stream: _StreamState,
+) -> "Callable[[str, str, bool], Coroutine]":
+    """Build the flush callback wired to the registry and stream state."""
+
+    async def _on_flush(group: str, text: str, is_final: bool) -> None:
+        """Called by the debouncer when it's time to update the IM message."""
+        channel_name = stream.active_channel.get(group)
+        chat_id = stream.active_chat.get(group)
+
+        if not channel_name or not chat_id:
+            log.warning("debounce.flush_no_session", group=group)
+            return
+
+        try:
+            adapter = registry.get(channel_name)
+        except KeyError:
+            log.error("debounce.flush_adapter_not_found", channel=channel_name)
+            return
 
         existing_id = stream.stream_msg_id.get(group)
         if existing_id:
-            await adapter.edit_message(
-                chat_id, existing_id, OutgoingMessage(text=buf)
-            )
+            # Append incoming text to the buffer to build the full accumulated text
+            buf = stream.stream_buffer.get(group, "")
+            buf += text
+            stream.stream_buffer[group] = buf
+            await adapter.edit_message(chat_id, existing_id, OutgoingMessage(text=buf))
+            log.debug("debounce.edit", group=group, chars=len(buf), is_final=is_final)
         else:
-            msg_id = await adapter.send_message(
-                chat_id, OutgoingMessage(text=buf)
-            )
+            # First flush: send a new message (or edit the thinking placeholder)
+            # The "thinking..." placeholder_id is pre-seeded in stream.stream_msg_id
+            # by _group_consumer — but if it isn't present we send fresh.
+            msg_id = await adapter.send_message(chat_id, OutgoingMessage(text=text))
             stream.stream_msg_id[group] = msg_id
+            stream.stream_buffer[group] = text
+            log.debug("debounce.send", group=group, chars=len(text))
 
         if is_final:
             stream.stream_msg_id.pop(group, None)
             stream.stream_buffer.pop(group, None)
+
+    return _on_flush
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +206,7 @@ async def _group_consumer(
             placeholder_id = await adapter.send_message(
                 msg.chat_id, OutgoingMessage(text=_THINKING)
             )
-            # Store as the stream message so first chunk edits it
+            # Store as the stream message so first debounce flush edits it
             stream.stream_msg_id[group_name] = placeholder_id
         except Exception:
             log.exception("consumer.thinking_failed", group=group_name)
@@ -204,6 +234,7 @@ async def _group_consumer(
                 prompt=msg.text,
                 env_vars=env_vars,
                 mounts=mounts,
+                is_main=is_main,
                 session_id=session_id,
             )
         except Exception as exc:
@@ -290,9 +321,21 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
 
     stream = _StreamState()
 
+    # Streaming debouncer — flush every 500 ms or 200 chars, whichever first
+    debouncer = StreamDebouncer(
+        debounce_ms=config.streaming.debounce_ms,
+        debounce_chars=config.streaming.debounce_chars,
+    )
+    flush_cb = _make_debounce_flush(registry, stream)
+    debouncer.set_flush_callback(flush_cb)
+    await debouncer.start()
+
     async def dispatch_cb(method: str, params: dict, rpc_id: str) -> None:
         await _ipc_dispatch(
-            method, params, rpc_id, registry=registry, stream=stream
+            method, params, rpc_id,
+            registry=registry,
+            stream=stream,
+            debouncer=debouncer,
         )
 
     ipc = IPCWatcher()
@@ -360,6 +403,7 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
         task.cancel()
     await asyncio.gather(*consumer_tasks, return_exceptions=True)
 
+    await debouncer.stop()
     await registry.stop_all()
     await ipc.stop()
     await db.backup()

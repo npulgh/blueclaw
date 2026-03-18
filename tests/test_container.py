@@ -6,12 +6,39 @@ All tests mock subprocess calls — no real Docker required.
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.config import ContainerConfig, SecurityConfig
 from src.container_manager import ContainerManager, ContainerResult, MountValidationError
+
+
+# ---------------------------------------------------------------------------
+# Platform helpers
+# ---------------------------------------------------------------------------
+
+def _can_create_symlinks() -> bool:
+    """Return True if the current process can create symlinks.
+
+    On Windows, symlink creation requires either Developer Mode or the
+    SeCreateSymbolicLinkPrivilege.  This probe creates and immediately
+    removes a test symlink to detect the capability at runtime.
+    """
+    if os.name != "nt":
+        return True
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "target"
+            target.mkdir()
+            link = Path(tmpdir) / "probe_link"
+            link.symlink_to(target)
+            return True
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +191,7 @@ class TestBuildCommand:
                 "ipc_dir": "/host/data/ipc/g",
             },
             session_id="s",
+            is_main=True,
         )
         # All three -v flags should appear
         v_indices = [i for i, x in enumerate(cmd) if x == "-v"]
@@ -241,6 +269,156 @@ class TestValidateMounts:
         m = _make_manager()
         # Empty string should not raise
         m._validate_mounts({"group_dir": ""})
+
+
+# ---------------------------------------------------------------------------
+# T2.4 — Path traversal, symlink resolution, read-only enforcement
+# ---------------------------------------------------------------------------
+
+class TestMountSecurityValidation:
+    """T2.4 acceptance tests: path traversal, symlinks, and read-only mounts."""
+
+    # --- Path traversal ---
+
+    def test_path_traversal_relative_rejected(self):
+        """'../../../etc/passwd' must be rejected."""
+        m = _make_manager()
+        with pytest.raises(MountValidationError, match="path traversal"):
+            m._validate_mounts({"group_dir": "../../../etc/passwd"})
+
+    def test_path_traversal_absolute_rejected(self):
+        """/data/../../etc/passwd must be rejected."""
+        m = _make_manager()
+        with pytest.raises(MountValidationError, match="path traversal"):
+            m._validate_mounts({"group_dir": "/data/../../etc/passwd"})
+
+    def test_path_traversal_double_dot_in_middle(self):
+        """/data/groups/../../../etc must be rejected."""
+        m = _make_manager()
+        with pytest.raises(MountValidationError, match="path traversal"):
+            m._validate_mounts({"ipc_dir": "/data/groups/../../../etc"})
+
+    def test_clean_absolute_path_passes(self):
+        """A normal absolute path with no '..' must pass validation."""
+        m = _make_manager()
+        # Should not raise
+        m._validate_mounts({
+            "group_dir": "/data/groups/mygroup",
+            "ipc_dir": "/data/ipc/mygroup",
+        })
+
+    # --- Blocked pattern detection via raw path ---
+
+    def test_ssh_directory_rejected(self):
+        """/home/user/.ssh must be rejected (blocked pattern '.ssh')."""
+        m = _make_manager()
+        with pytest.raises(MountValidationError, match=".ssh"):
+            m._validate_mounts({"group_dir": "/home/user/.ssh"})
+
+    # --- Symlink resolution ---
+
+    @pytest.mark.skipif(
+        os.name == "nt" and not _can_create_symlinks(),
+        reason="Creating symlinks requires elevated privileges on Windows",
+    )
+    def test_symlink_to_blocked_dir_rejected(self):
+        """A symlink whose resolved target contains a blocked component is rejected."""
+        m = _make_manager()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a real .ssh directory inside tmpdir
+            ssh_dir = Path(tmpdir) / ".ssh"
+            ssh_dir.mkdir()
+            # Create a symlink named "safe_name" that points to .ssh
+            link = Path(tmpdir) / "safe_name"
+            link.symlink_to(ssh_dir)
+
+            # "safe_name" looks innocent but resolves to .ssh → must be rejected
+            with pytest.raises(MountValidationError, match=".ssh"):
+                m._validate_mounts({"group_dir": str(link)})
+
+    @pytest.mark.skipif(
+        os.name == "nt" and not _can_create_symlinks(),
+        reason="Creating symlinks requires elevated privileges on Windows",
+    )
+    def test_symlink_to_safe_dir_passes(self):
+        """A symlink to a normal (non-blocked) directory must pass."""
+        m = _make_manager()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            safe_target = Path(tmpdir) / "workspace"
+            safe_target.mkdir()
+            link = Path(tmpdir) / "group_link"
+            link.symlink_to(safe_target)
+
+            # Should not raise
+            m._validate_mounts({"group_dir": str(link)})
+
+    def test_nonexistent_path_skips_symlink_check(self):
+        """Non-existent paths skip symlink resolution (no OSError raised)."""
+        m = _make_manager()
+        # A non-existent path with no blocked components should pass raw check
+        m._validate_mounts({"group_dir": "/nonexistent/path/workspace"})
+
+    # --- Read-only enforcement for non-main groups ---
+
+    def test_non_main_group_dir_is_readonly(self):
+        """Non-main group: group_dir mount must use :ro."""
+        m = _make_manager()
+        cmd = m._build_command(
+            group_name="secondary",
+            env_vars={},
+            mounts={"group_dir": "/host/groups/secondary", "ipc_dir": "/host/ipc/secondary"},
+            session_id="s",
+            is_main=False,
+        )
+        mount_strs = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-v"]
+        assert any("/host/groups/secondary:/workspace/group:ro" in s for s in mount_strs), (
+            f"Expected group_dir to be :ro for non-main group; got: {mount_strs}"
+        )
+
+    def test_non_main_ipc_dir_stays_readwrite(self):
+        """Non-main group: ipc_dir must remain :rw so IPC still works."""
+        m = _make_manager()
+        cmd = m._build_command(
+            group_name="secondary",
+            env_vars={},
+            mounts={"group_dir": "/host/groups/secondary", "ipc_dir": "/host/ipc/secondary"},
+            session_id="s",
+            is_main=False,
+        )
+        mount_strs = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-v"]
+        assert any("/host/ipc/secondary:/workspace/ipc:rw" in s for s in mount_strs), (
+            f"Expected ipc_dir to be :rw; got: {mount_strs}"
+        )
+
+    def test_main_group_dir_is_readwrite(self):
+        """Main group: group_dir mount must use :rw."""
+        m = _make_manager()
+        cmd = m._build_command(
+            group_name="main",
+            env_vars={},
+            mounts={"group_dir": "/host/groups/main"},
+            session_id="s",
+            is_main=True,
+        )
+        mount_strs = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-v"]
+        assert any("/host/groups/main:/workspace/group:rw" in s for s in mount_strs), (
+            f"Expected group_dir to be :rw for main group; got: {mount_strs}"
+        )
+
+    def test_default_is_main_false(self):
+        """Omitting is_main from _build_command defaults to non-main (:ro)."""
+        m = _make_manager()
+        cmd = m._build_command(
+            group_name="g",
+            env_vars={},
+            mounts={"group_dir": "/host/groups/g"},
+            session_id="s",
+            # is_main not passed — should default to False
+        )
+        mount_strs = [cmd[i + 1] for i, x in enumerate(cmd) if x == "-v"]
+        assert any(":/workspace/group:ro" in s for s in mount_strs), (
+            f"Expected default is_main=False to produce :ro; got: {mount_strs}"
+        )
 
 
 # ---------------------------------------------------------------------------
