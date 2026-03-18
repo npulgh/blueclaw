@@ -29,10 +29,12 @@ from src.main import (
     _StreamState,
     _group_consumer,
     _ipc_dispatch,
+    _make_debounce_flush,
     _send_error,
     main,
 )
 from src.router import RouteResult
+from src.stream_debouncer import StreamDebouncer
 from src.types import IncomingMessage, OutgoingMessage
 
 
@@ -138,6 +140,13 @@ class TestStreamState:
 # IPC dispatch tests
 # ---------------------------------------------------------------------------
 
+def _make_passthrough_debouncer(registry, stream) -> StreamDebouncer:
+    """Return a debouncer that flushes immediately (chars=1) for testing."""
+    d = StreamDebouncer(debounce_ms=9999, debounce_chars=1)
+    d.set_flush_callback(_make_debounce_flush(registry, stream))
+    return d
+
+
 class TestIPCDispatch:
     @pytest.mark.asyncio
     async def test_send_message(self):
@@ -145,6 +154,8 @@ class TestIPCDispatch:
         reg = _mock_registry(adapter)
         stream = _StreamState()
         stream.begin("g1", "telegram", "chat-1")
+        debouncer = _make_passthrough_debouncer(reg, stream)
+        await debouncer.start()
 
         await _ipc_dispatch(
             "send_message",
@@ -152,19 +163,23 @@ class TestIPCDispatch:
             "rpc-1",
             registry=reg,
             stream=stream,
+            debouncer=debouncer,
         )
 
         adapter.send_message.assert_awaited_once_with(
             "chat-1", OutgoingMessage(text="Hello from agent")
         )
+        await debouncer.stop()
 
     @pytest.mark.asyncio
     async def test_stream_chunk_first(self):
-        """First stream chunk sends a new message."""
+        """First stream chunk (via debouncer flush) sends a new message."""
         adapter = _mock_adapter()
         reg = _mock_registry(adapter)
         stream = _StreamState()
         stream.begin("g1", "telegram", "chat-1")
+        debouncer = _make_passthrough_debouncer(reg, stream)
+        await debouncer.start()
 
         await _ipc_dispatch(
             "stream_chunk",
@@ -172,21 +187,26 @@ class TestIPCDispatch:
             "rpc-1",
             registry=reg,
             stream=stream,
+            debouncer=debouncer,
         )
 
+        # Debouncer with chars=1 flushes immediately → send_message called
         adapter.send_message.assert_awaited_once()
         assert stream.stream_msg_id["g1"] == "sent-1"
         assert stream.stream_buffer["g1"] == "Hello"
+        await debouncer.stop()
 
     @pytest.mark.asyncio
     async def test_stream_chunk_subsequent_edits(self):
-        """Subsequent chunks edit the existing message."""
+        """Subsequent chunks (via flush) edit the existing message."""
         adapter = _mock_adapter()
         reg = _mock_registry(adapter)
         stream = _StreamState()
         stream.begin("g1", "telegram", "chat-1")
         stream.stream_msg_id["g1"] = "existing-msg"
         stream.stream_buffer["g1"] = "Hello"
+        debouncer = _make_passthrough_debouncer(reg, stream)
+        await debouncer.start()
 
         await _ipc_dispatch(
             "stream_chunk",
@@ -194,21 +214,26 @@ class TestIPCDispatch:
             "rpc-2",
             registry=reg,
             stream=stream,
+            debouncer=debouncer,
         )
 
+        # Debouncer flushes " world"; flush_cb appends to existing buffer "Hello"
         adapter.edit_message.assert_awaited_once_with(
             "chat-1", "existing-msg", OutgoingMessage(text="Hello world")
         )
+        await debouncer.stop()
 
     @pytest.mark.asyncio
     async def test_stream_chunk_final_clears_state(self):
-        """Final chunk clears streaming state."""
+        """Final chunk clears streaming state after flush."""
         adapter = _mock_adapter()
         reg = _mock_registry(adapter)
         stream = _StreamState()
         stream.begin("g1", "telegram", "chat-1")
         stream.stream_msg_id["g1"] = "existing-msg"
         stream.stream_buffer["g1"] = "Hello"
+        debouncer = _make_passthrough_debouncer(reg, stream)
+        await debouncer.start()
 
         await _ipc_dispatch(
             "stream_chunk",
@@ -216,16 +241,21 @@ class TestIPCDispatch:
             "rpc-3",
             registry=reg,
             stream=stream,
+            debouncer=debouncer,
         )
 
         assert "g1" not in stream.stream_msg_id
         assert "g1" not in stream.stream_buffer
+        await debouncer.stop()
 
     @pytest.mark.asyncio
     async def test_no_active_session_is_noop(self):
         """IPC dispatch with no active session logs warning, doesn't crash."""
         reg = _mock_registry()
         stream = _StreamState()
+        debouncer = StreamDebouncer(debounce_ms=9999, debounce_chars=1)
+        debouncer.set_flush_callback(_make_debounce_flush(reg, stream))
+        await debouncer.start()
 
         await _ipc_dispatch(
             "send_message",
@@ -233,9 +263,135 @@ class TestIPCDispatch:
             "rpc-1",
             registry=reg,
             stream=stream,
+            debouncer=debouncer,
         )
         # No adapter calls
         reg.get.return_value.send_message.assert_not_awaited()
+        await debouncer.stop()
+
+
+# ---------------------------------------------------------------------------
+# Streaming debounce integration tests
+# ---------------------------------------------------------------------------
+
+class TestStreamingDebounce:
+    @pytest.mark.asyncio
+    async def test_small_chunk_no_immediate_edit(self):
+        """A chunk below debounce_chars threshold does NOT trigger edit_message."""
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        stream.begin("g1", "telegram", "chat-1")
+        stream.stream_msg_id["g1"] = "placeholder-id"
+
+        # Large threshold so no char flush; large time so no timer flush
+        debouncer = StreamDebouncer(debounce_ms=9999, debounce_chars=200)
+        debouncer.set_flush_callback(_make_debounce_flush(reg, stream))
+        await debouncer.start()
+
+        await _ipc_dispatch(
+            "stream_chunk",
+            {"group": "g1", "text": "hi", "is_final": False},
+            "rpc-1",
+            registry=reg,
+            stream=stream,
+            debouncer=debouncer,
+        )
+
+        # No IM call yet — chunk is buffered
+        adapter.edit_message.assert_not_awaited()
+        adapter.send_message.assert_not_awaited()
+        assert debouncer.has_pending("g1")
+
+        await debouncer.stop()
+
+    @pytest.mark.asyncio
+    async def test_large_chunk_triggers_immediate_edit(self):
+        """A chunk >= debounce_chars triggers edit_message immediately."""
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        stream.begin("g1", "telegram", "chat-1")
+        stream.stream_msg_id["g1"] = "placeholder-id"
+
+        debouncer = StreamDebouncer(debounce_ms=9999, debounce_chars=10)
+        debouncer.set_flush_callback(_make_debounce_flush(reg, stream))
+        await debouncer.start()
+
+        big_chunk = "A" * 10  # exactly at threshold
+        await _ipc_dispatch(
+            "stream_chunk",
+            {"group": "g1", "text": big_chunk, "is_final": False},
+            "rpc-1",
+            registry=reg,
+            stream=stream,
+            debouncer=debouncer,
+        )
+
+        # Placeholder exists → edit_message used
+        adapter.edit_message.assert_awaited_once_with(
+            "chat-1", "placeholder-id", OutgoingMessage(text=big_chunk)
+        )
+
+        await debouncer.stop()
+
+    @pytest.mark.asyncio
+    async def test_final_chunk_edits_placeholder(self):
+        """is_final chunk always flushes and edits the placeholder."""
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        stream.begin("g1", "telegram", "chat-1")
+        stream.stream_msg_id["g1"] = "placeholder-id"
+
+        debouncer = StreamDebouncer(debounce_ms=9999, debounce_chars=9999)
+        debouncer.set_flush_callback(_make_debounce_flush(reg, stream))
+        await debouncer.start()
+
+        await _ipc_dispatch(
+            "stream_chunk",
+            {"group": "g1", "text": "Done!", "is_final": True},
+            "rpc-1",
+            registry=reg,
+            stream=stream,
+            debouncer=debouncer,
+        )
+
+        adapter.edit_message.assert_awaited_once_with(
+            "chat-1", "placeholder-id", OutgoingMessage(text="Done!")
+        )
+        # State cleaned up
+        assert "g1" not in stream.stream_msg_id
+        assert "g1" not in stream.stream_buffer
+
+        await debouncer.stop()
+
+    @pytest.mark.asyncio
+    async def test_no_placeholder_sends_new_message(self):
+        """When no placeholder exists, the first flush sends a new message."""
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        stream.begin("g1", "telegram", "chat-1")
+        # No placeholder set
+
+        debouncer = StreamDebouncer(debounce_ms=9999, debounce_chars=1)
+        debouncer.set_flush_callback(_make_debounce_flush(reg, stream))
+        await debouncer.start()
+
+        await _ipc_dispatch(
+            "stream_chunk",
+            {"group": "g1", "text": "X", "is_final": False},
+            "rpc-1",
+            registry=reg,
+            stream=stream,
+            debouncer=debouncer,
+        )
+
+        adapter.send_message.assert_awaited_once()
+        assert stream.stream_msg_id["g1"] == "sent-1"
+
+        await debouncer.stop()
 
 
 # ---------------------------------------------------------------------------

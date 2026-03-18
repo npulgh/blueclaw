@@ -279,9 +279,10 @@ class TestSessionIdFile:
         async def fake_query(prompt, options):
             yield init_event
 
-        # Patch ipc_bridge.send_message so it doesn't fail
+        # Patch ipc_bridge.send_message and stream_chunk so they don't fail
         ipc_bridge_mock = types.ModuleType("ipc_bridge")
         ipc_bridge_mock.send_message = MagicMock()
+        ipc_bridge_mock.stream_chunk = MagicMock()
 
         env = {
             "ANTHROPIC_API_KEY": "fake-key",
@@ -290,6 +291,8 @@ class TestSessionIdFile:
             "LYNXCLAW_PROMPT": "hello",
             "LYNXCLAW_CHAT_ID": "chat-1",
             "IPC_BASE_DIR": str(tmp_path),
+            # Use non-streaming mode so main() calls send_message (simpler test)
+            "LYNXCLAW_STREAMING": "0",
         }
 
         with (

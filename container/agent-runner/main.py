@@ -6,6 +6,11 @@ audit logs.
 
 run_agent() is the single abstraction point for SDK interaction — future
 backend changes only touch this function.
+
+Streaming: when streaming is enabled (LYNXCLAW_STREAMING=1), run_agent()
+emits stream_chunk IPC calls as text events arrive from the SDK, with
+is_final=True on the last chunk. The final send_message call is omitted
+when streaming, since the is_final chunk replaces it.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import structlog
 
@@ -83,6 +88,9 @@ async def run_agent(
     session_id: str,
     hooks: dict,
     api_key: str,
+    *,
+    stream_cb: "AsyncIterator[tuple[str, bool]] | None" = None,
+    on_chunk: "Any | None" = None,
 ) -> tuple[str, str]:
     """Run the Claude Agent SDK and return (response_text, new_session_id).
 
@@ -94,6 +102,10 @@ async def run_agent(
         session_id: Session ID for resumable conversations (empty = new session).
         hooks: Hook dict passed to ClaudeAgentOptions.
         api_key: Anthropic API key.
+        on_chunk: Optional async callable(text: str, is_final: bool) invoked for
+                  each text block as it arrives. When provided, the caller is
+                  responsible for delivering chunks to the IM platform; the
+                  final send_message call is skipped.
 
     Returns:
         Tuple of (agent's final text response, session_id from this run).
@@ -110,6 +122,8 @@ async def run_agent(
 
     response_parts: list[str] = []
     captured_session_id: str = session_id
+    last_text_index: int = -1  # tracks which response_parts index was last emitted
+
     async for event in query(prompt=prompt, options=options):
         # Capture session_id from SDK init event
         if (
@@ -120,13 +134,28 @@ async def run_agent(
             and "session_id" in event.data
         ):
             captured_session_id = event.data["session_id"]
+
         # Collect text from assistant messages
         if hasattr(event, "content"):
             for block in event.content:
                 if hasattr(block, "text"):
                     response_parts.append(block.text)
+                    if on_chunk is not None:
+                        # Emit as non-final chunk; is_final is set after the loop
+                        await on_chunk(block.text, False)
+                        last_text_index = len(response_parts) - 1
 
-    return "".join(response_parts), captured_session_id
+    full_text = "".join(response_parts)
+
+    # If streaming, emit a final chunk to signal completion
+    if on_chunk is not None and last_text_index >= 0:
+        # Send an empty final chunk to close the stream cleanly
+        await on_chunk("", True)
+    elif on_chunk is not None:
+        # No text was produced; still signal is_final so the host cleans up
+        await on_chunk("", True)
+
+    return full_text, captured_session_id
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +169,7 @@ async def main() -> None:
     prompt = os.environ.get("LYNXCLAW_PROMPT", "")
     chat_id = os.environ.get("LYNXCLAW_CHAT_ID", "")
     ipc_base = os.environ.get("IPC_BASE_DIR", "/workspace/ipc")
+    streaming_enabled = os.environ.get("LYNXCLAW_STREAMING", "1") == "1"
 
     audit_dir = Path(ipc_base) / group / "audit"
 
@@ -181,13 +211,34 @@ async def main() -> None:
     # Import ipc_bridge from the same runner directory
     runner_dir = Path(__file__).parent
     sys.path.insert(0, str(runner_dir))
-    from ipc_bridge import send_message  # type: ignore
+    from ipc_bridge import send_message, stream_chunk  # type: ignore
 
     try:
-        log.info("agent starting", group=group, session_id=session_id or "new")
-        response, new_session_id = await run_agent(prompt, session_id, hooks, api_key)
-        send_message(group=group, chat_id=chat_id, text=response, ipc_base=ipc_base)
-        log.info("agent done", chars=len(response))
+        log.info("agent starting", group=group, session_id=session_id or "new",
+                 streaming=streaming_enabled)
+
+        if streaming_enabled:
+            # Streaming path: emit stream_chunk IPC calls as text arrives
+            async def on_chunk(text: str, is_final: bool) -> None:
+                stream_chunk(
+                    group=group,
+                    chat_id=chat_id,
+                    text=text,
+                    is_final=is_final,
+                    ipc_base=ipc_base,
+                )
+
+            response, new_session_id = await run_agent(
+                prompt, session_id, hooks, api_key, on_chunk=on_chunk
+            )
+            log.info("agent done (streaming)", chars=len(response))
+        else:
+            # Non-streaming path: collect full response, then send_message
+            response, new_session_id = await run_agent(
+                prompt, session_id, hooks, api_key
+            )
+            send_message(group=group, chat_id=chat_id, text=response, ipc_base=ipc_base)
+            log.info("agent done", chars=len(response))
 
         # Write session_id so the host can persist it for the next turn
         if new_session_id:
