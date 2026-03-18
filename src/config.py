@@ -63,6 +63,15 @@ class RouterConfig:
 
 
 @dataclass
+class GroupConfig:
+    name: str
+    channel: str
+    chat_id: str
+    is_main: bool = False
+    trigger: str = "@bot"
+
+
+@dataclass
 class ProxyConfig:
     enabled: bool = False
     allowed_domains: list[str] = field(default_factory=lambda: [
@@ -101,6 +110,7 @@ class Config:
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    groups: list[GroupConfig] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +172,21 @@ def load_config(yaml_path: str | Path = "lynxclaw.config.yaml", *, dotenv_path: 
     for section_name, section_obj in section_map.items():
         if section_name in raw and isinstance(raw[section_name], dict):
             _merge_section(section_obj, raw[section_name])
+
+    # Parse groups list
+    groups_raw = raw.get("groups")
+    if groups_raw and isinstance(groups_raw, list):
+        cfg.groups = [
+            GroupConfig(
+                name=g["name"],
+                channel=g["channel"],
+                chat_id=str(g["chat_id"]),
+                is_main=bool(g.get("is_main", False)),
+                trigger=g.get("trigger", cfg.router.default_trigger),
+            )
+            for g in groups_raw
+            if isinstance(g, dict) and "name" in g and "channel" in g and "chat_id" in g
+        ]
 
     # 4. Apply env var overrides
     if log_level := os.environ.get("LOG_LEVEL"):

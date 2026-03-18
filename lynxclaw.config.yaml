@@ -62,3 +62,12 @@ security:
     - ".env"
     - "*.pem"
     - "*.key"
+
+# ── Groups ───────────────────────────────────────────────────────────────────
+# Maps channel chat_id → group name. Written to DB on startup by the router.
+groups:
+  - name: main
+    channel: telegram
+    chat_id: "-1001234567890"
+    is_main: true
+    trigger: "@bot"
