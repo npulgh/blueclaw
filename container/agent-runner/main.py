@@ -83,8 +83,8 @@ async def run_agent(
     session_id: str,
     hooks: dict,
     api_key: str,
-) -> str:
-    """Run the Claude Agent SDK and return the final text response.
+) -> tuple[str, str]:
+    """Run the Claude Agent SDK and return (response_text, new_session_id).
 
     This is the single point of SDK interaction. Changing the backend
     (e.g., swapping SDK versions or providers) only requires editing here.
@@ -96,7 +96,7 @@ async def run_agent(
         api_key: Anthropic API key.
 
     Returns:
-        The agent's final text response.
+        Tuple of (agent's final text response, session_id from this run).
     """
     from claude_agent_sdk import ClaudeAgentOptions, query  # type: ignore
 
@@ -109,14 +109,24 @@ async def run_agent(
         options.resume = session_id
 
     response_parts: list[str] = []
+    captured_session_id: str = session_id
     async for event in query(prompt=prompt, options=options):
+        # Capture session_id from SDK init event
+        if (
+            hasattr(event, "subtype")
+            and event.subtype == "init"
+            and hasattr(event, "data")
+            and isinstance(event.data, dict)
+            and "session_id" in event.data
+        ):
+            captured_session_id = event.data["session_id"]
         # Collect text from assistant messages
         if hasattr(event, "content"):
             for block in event.content:
                 if hasattr(block, "text"):
                     response_parts.append(block.text)
 
-    return "".join(response_parts)
+    return "".join(response_parts), captured_session_id
 
 
 # ---------------------------------------------------------------------------
@@ -175,9 +185,16 @@ async def main() -> None:
 
     try:
         log.info("agent starting", group=group, session_id=session_id or "new")
-        response = await run_agent(prompt, session_id, hooks, api_key)
+        response, new_session_id = await run_agent(prompt, session_id, hooks, api_key)
         send_message(group=group, chat_id=chat_id, text=response, ipc_base=ipc_base)
         log.info("agent done", chars=len(response))
+
+        # Write session_id so the host can persist it for the next turn
+        if new_session_id:
+            session_file = Path(ipc_base) / group / "session_id.txt"
+            session_file.parent.mkdir(parents=True, exist_ok=True)
+            session_file.write_text(new_session_id, encoding="utf-8")
+            log.info("session_id written", session_id=new_session_id)
     except Exception as exc:
         log.error("agent error", error=str(exc))
         error_text = f"[Agent error: {exc}]"

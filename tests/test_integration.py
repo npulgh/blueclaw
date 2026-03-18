@@ -81,6 +81,13 @@ def _make_msg(**overrides) -> IncomingMessage:
     return IncomingMessage(**defaults)
 
 
+def _mock_db() -> MagicMock:
+    db = MagicMock()
+    db.get_session = AsyncMock(return_value=None)
+    db.save_session = AsyncMock()
+    return db
+
+
 def _mock_adapter() -> MagicMock:
     adapter = MagicMock()
     adapter.send_message = AsyncMock(return_value="sent-1")
@@ -272,6 +279,7 @@ class TestGroupConsumer:
                 registry=reg,
                 stream=stream,
                 is_main=False,
+                db=_mock_db(),
             )
         )
 
@@ -327,6 +335,7 @@ class TestGroupConsumer:
                 registry=reg,
                 stream=stream,
                 is_main=False,
+                db=_mock_db(),
             )
         )
 
@@ -376,6 +385,7 @@ class TestGroupConsumer:
                 registry=reg,
                 stream=stream,
                 is_main=False,
+                db=_mock_db(),
             )
         )
 
@@ -420,6 +430,7 @@ class TestGroupConsumer:
                 registry=reg,
                 stream=stream,
                 is_main=False,
+                db=_mock_db(),
             )
         )
 
@@ -466,6 +477,7 @@ class TestGroupConsumer:
                 registry=reg,
                 stream=stream,
                 is_main=True,
+                db=_mock_db(),
             )
         )
 
@@ -576,3 +588,119 @@ class TestMainLifecycle:
             ipc_inst.init.assert_awaited_once()
             reg_inst.start_all.assert_awaited_once()
             ipc_inst.start.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Session ID flow integration tests
+# ---------------------------------------------------------------------------
+
+class TestSessionFlow:
+    @pytest.mark.asyncio
+    async def test_consumer_reads_session_from_db_and_passes_to_spawn(self):
+        """Consumer reads existing session_id from DB and passes it to spawn."""
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        config = _make_config()
+
+        router = MagicMock()
+        call_count = 0
+
+        async def fake_get_next(group):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_msg()
+            await asyncio.sleep(999)
+
+        router.get_next = AsyncMock(side_effect=fake_get_next)
+
+        container_mgr = MagicMock()
+        container_mgr.spawn = AsyncMock(
+            return_value=ContainerResult(stdout="ok", stderr="", exit_code=0)
+        )
+
+        db = _mock_db()
+        db.get_session = AsyncMock(return_value="existing-session-uuid")
+
+        task = asyncio.create_task(
+            _group_consumer(
+                "test-group",
+                config=config,
+                router=router,
+                container_mgr=container_mgr,
+                registry=reg,
+                stream=stream,
+                is_main=False,
+                db=db,
+            )
+        )
+
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        db.get_session.assert_awaited_once_with(group_name="test-group")
+        call_kwargs = container_mgr.spawn.call_args[1]
+        assert call_kwargs["session_id"] == "existing-session-uuid"
+
+    @pytest.mark.asyncio
+    async def test_consumer_saves_session_id_after_successful_spawn(self, tmp_path):
+        """Consumer reads session_id.txt after spawn and saves it to DB."""
+        import os
+
+        adapter = _mock_adapter()
+        reg = _mock_registry(adapter)
+        stream = _StreamState()
+        config = _make_config()
+
+        router = MagicMock()
+        call_count = 0
+
+        async def fake_get_next(group):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_msg()
+            await asyncio.sleep(999)
+
+        router.get_next = AsyncMock(side_effect=fake_get_next)
+
+        # Write a session_id.txt file that the consumer will read
+        ipc_group_dir = tmp_path / "data" / "ipc" / "test-group"
+        ipc_group_dir.mkdir(parents=True)
+        (ipc_group_dir / "session_id.txt").write_text("new-session-uuid", encoding="utf-8")
+
+        container_mgr = MagicMock()
+        container_mgr.spawn = AsyncMock(
+            return_value=ContainerResult(stdout="ok", stderr="", exit_code=0)
+        )
+
+        db = _mock_db()
+
+        # Patch os.getcwd to return tmp_path so the consumer finds the file
+        with patch("src.main.os.getcwd", return_value=str(tmp_path)):
+            task = asyncio.create_task(
+                _group_consumer(
+                    "test-group",
+                    config=config,
+                    router=router,
+                    container_mgr=container_mgr,
+                    registry=reg,
+                    stream=stream,
+                    is_main=False,
+                    db=db,
+                )
+            )
+
+            await asyncio.sleep(0.1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        db.save_session.assert_awaited_once_with(
+            group_name="test-group", session_id="new-session-uuid"
+        )
+        # File should be cleaned up
+        assert not (ipc_group_dir / "session_id.txt").exists()

@@ -139,6 +139,8 @@ class TestRunAgent:
         block.text = "Hello from agent"
         event = MagicMock()
         event.content = [block]
+        # No subtype attribute → no session_id capture
+        del event.subtype
 
         async def fake_query(prompt, options):
             yield event
@@ -149,10 +151,11 @@ class TestRunAgent:
             sdk_mock = sys.modules["claude_agent_sdk"]
             sdk_mock.query = fake_query
 
-            result = asyncio.run(
+            text, session_id = asyncio.run(
                 runner.run_agent("test prompt", "", {}, "fake-key")
             )
-        assert "Hello from agent" in result
+        assert "Hello from agent" in text
+        assert session_id == ""  # no init event → falls back to input session_id
 
     def test_empty_response_returns_empty_string(self):
         async def fake_query(prompt, options):
@@ -165,10 +168,35 @@ class TestRunAgent:
             sdk_mock = sys.modules["claude_agent_sdk"]
             sdk_mock.query = fake_query
 
-            result = asyncio.run(
+            text, session_id = asyncio.run(
                 runner.run_agent("test", "", {}, "fake-key")
             )
-        assert result == ""
+        assert text == ""
+        assert session_id == ""
+
+    def test_captures_session_id_from_init_event(self):
+        """run_agent captures session_id from SystemMessage(subtype='init')."""
+
+        init_event = MagicMock()
+        init_event.subtype = "init"
+        init_event.data = {"session_id": "2a9917c8-b197-4952-a186-cdae7bbfdcda"}
+        # No content on init event
+        del init_event.content
+
+        async def fake_query(prompt, options):
+            yield init_event
+
+        with patch.dict(sys.modules, {"claude_agent_sdk": _make_sdk_mock()}):
+            import importlib
+            importlib.reload(runner)
+            sdk_mock = sys.modules["claude_agent_sdk"]
+            sdk_mock.query = fake_query
+
+            text, session_id = asyncio.run(
+                runner.run_agent("test", "", {}, "fake-key")
+            )
+        assert session_id == "2a9917c8-b197-4952-a186-cdae7bbfdcda"
+        assert text == ""
 
 
 # ---------------------------------------------------------------------------
@@ -230,3 +258,50 @@ class TestHooks:
         data = json.loads(files[0].read_text())
         assert data["tool_name"] == "Read"
         assert data["blocked"] is False
+
+
+# ---------------------------------------------------------------------------
+# Session ID file written by main()
+# ---------------------------------------------------------------------------
+
+class TestSessionIdFile:
+    def test_session_id_file_written_after_run(self, tmp_path):
+        """main() writes session_id.txt to the IPC dir after a successful run."""
+        group = "main"
+        ipc_dir = tmp_path / group
+        ipc_dir.mkdir(parents=True)
+
+        init_event = MagicMock()
+        init_event.subtype = "init"
+        init_event.data = {"session_id": "test-session-uuid"}
+        del init_event.content
+
+        async def fake_query(prompt, options):
+            yield init_event
+
+        # Patch ipc_bridge.send_message so it doesn't fail
+        ipc_bridge_mock = types.ModuleType("ipc_bridge")
+        ipc_bridge_mock.send_message = MagicMock()
+
+        env = {
+            "ANTHROPIC_API_KEY": "fake-key",
+            "LYNXCLAW_GROUP": group,
+            "LYNXCLAW_SESSION_ID": "",
+            "LYNXCLAW_PROMPT": "hello",
+            "LYNXCLAW_CHAT_ID": "chat-1",
+            "IPC_BASE_DIR": str(tmp_path),
+        }
+
+        with (
+            patch.dict("os.environ", env),
+            patch.dict(sys.modules, {"claude_agent_sdk": _make_sdk_mock(), "ipc_bridge": ipc_bridge_mock}),
+        ):
+            import importlib
+            importlib.reload(runner)
+            sys.modules["claude_agent_sdk"].query = fake_query
+
+            asyncio.run(runner.main())
+
+        session_file = ipc_dir / "session_id.txt"
+        assert session_file.exists(), "session_id.txt was not written"
+        assert session_file.read_text().strip() == "test-session-uuid"

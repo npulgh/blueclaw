@@ -236,3 +236,28 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # sessions helpers
+    # ------------------------------------------------------------------
+
+    async def save_session(self, *, group_name: str, session_id: str) -> None:
+        """Upsert session_id for a group."""
+        await self._conn.execute(
+            """INSERT INTO sessions (group_name, session_id, last_active)
+               VALUES (?, ?, ?)
+               ON CONFLICT(group_name) DO UPDATE SET
+                 session_id=excluded.session_id,
+                 last_active=excluded.last_active""",
+            (group_name, session_id, int(time.time())),
+        )
+        await self._conn.commit()
+
+    async def get_session(self, *, group_name: str) -> Optional[str]:
+        """Get session_id for a group, or None if no session exists."""
+        async with self._conn.execute(
+            "SELECT session_id FROM sessions WHERE group_name=?",
+            (group_name,),
+        ) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else None

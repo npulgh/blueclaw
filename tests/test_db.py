@@ -136,3 +136,35 @@ async def test_backup_idempotent(tmp_path):
 
     bak = tmp_path / "messages.db.bak"
     assert bak.exists()
+
+
+# ---------------------------------------------------------------------------
+# save_session / get_session
+# ---------------------------------------------------------------------------
+
+async def test_save_and_get_session(db: Database):
+    """save_session stores a session_id retrievable by get_session."""
+    # sessions table has FK to groups; insert a group first
+    await db.upsert_group(
+        name="grp1", channel="telegram", chat_id="c1", is_main=False
+    )
+    await db.save_session(group_name="grp1", session_id="uuid-abc-123")
+    result = await db.get_session(group_name="grp1")
+    assert result == "uuid-abc-123"
+
+
+async def test_save_session_upsert(db: Database):
+    """Calling save_session twice updates the session_id."""
+    await db.upsert_group(
+        name="grp2", channel="telegram", chat_id="c2", is_main=False
+    )
+    await db.save_session(group_name="grp2", session_id="first-id")
+    await db.save_session(group_name="grp2", session_id="second-id")
+    result = await db.get_session(group_name="grp2")
+    assert result == "second-id"
+
+
+async def test_get_session_unknown_group(db: Database):
+    """get_session returns None for a group with no session."""
+    result = await db.get_session(group_name="nonexistent")
+    assert result is None
