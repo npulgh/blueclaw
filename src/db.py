@@ -1,0 +1,198 @@
+"""Lynxclaw database layer.
+
+Wraps aiosqlite with schema migrations, WAL mode, and periodic VACUUM INTO backup.
+Schema version is tracked via SQLite PRAGMA user_version.
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import Any, Optional
+
+import aiosqlite
+
+# Bump this when the schema changes.
+SCHEMA_VERSION = 1
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS messages (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel       TEXT NOT NULL,
+  chat_id       TEXT NOT NULL,
+  message_id    TEXT NOT NULL,
+  group_name    TEXT,
+  sender_id     TEXT NOT NULL,
+  sender_name   TEXT,
+  content       TEXT NOT NULL,
+  direction     TEXT NOT NULL,
+  status        TEXT DEFAULT 'pending',
+  created_at    INTEGER NOT NULL,
+  processed_at  INTEGER,
+  UNIQUE(channel, chat_id, message_id)
+);
+
+CREATE TABLE IF NOT EXISTS groups (
+  name          TEXT PRIMARY KEY,
+  channel       TEXT NOT NULL,
+  chat_id       TEXT NOT NULL,
+  is_main       INTEGER DEFAULT 0,
+  trigger       TEXT DEFAULT '@bot',
+  created_at    INTEGER NOT NULL,
+  UNIQUE(channel, chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  group_name    TEXT PRIMARY KEY,
+  session_id    TEXT,
+  last_active   INTEGER,
+  FOREIGN KEY (group_name) REFERENCES groups(name)
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id            TEXT PRIMARY KEY,
+  group_name    TEXT NOT NULL,
+  type          TEXT NOT NULL,
+  schedule      TEXT NOT NULL,
+  prompt        TEXT NOT NULL,
+  status        TEXT DEFAULT 'active',
+  last_run      INTEGER,
+  next_run      INTEGER,
+  created_at    INTEGER NOT NULL,
+  FOREIGN KEY (group_name) REFERENCES groups(name)
+);
+
+CREATE TABLE IF NOT EXISTS cursors (
+  channel       TEXT NOT NULL,
+  chat_id       TEXT NOT NULL,
+  last_msg_id   TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (channel, chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS tool_audit_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_name    TEXT NOT NULL,
+  session_id    TEXT,
+  tool_name     TEXT NOT NULL,
+  agent_id      TEXT,
+  input_summary TEXT,
+  blocked       INTEGER DEFAULT 0,
+  created_at    INTEGER NOT NULL
+);
+"""
+
+
+class Database:
+    """Async SQLite database wrapper with migrations and backup support."""
+
+    def __init__(self) -> None:
+        self._conn: Optional[aiosqlite.Connection] = None
+        self._db_path: Optional[Path] = None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def init(self, db_path: str) -> None:
+        """Open the database, run migrations, and create an initial backup."""
+        self._db_path = Path(db_path)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self._conn = await aiosqlite.connect(self._db_path)
+        self._conn.row_factory = aiosqlite.Row
+
+        await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA foreign_keys=ON")
+        await self._migrate()
+        await self.backup()
+
+    async def close(self) -> None:
+        """Close the database connection."""
+        if self._conn:
+            await self._conn.close()
+            self._conn = None
+
+    # ------------------------------------------------------------------
+    # Migrations
+    # ------------------------------------------------------------------
+
+    async def _migrate(self) -> None:
+        async with self._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        version = row[0] if row else 0
+
+        if version < SCHEMA_VERSION:
+            await self._conn.executescript(_DDL)
+            await self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Backup
+    # ------------------------------------------------------------------
+
+    async def backup(self) -> None:
+        """Write a backup using VACUUM INTO (SQLite 3.27+)."""
+        if self._db_path is None or self._conn is None:
+            return
+        bak = str(self._db_path) + ".bak"
+        # VACUUM INTO fails if the target already exists; remove it first.
+        Path(bak).unlink(missing_ok=True)
+        await self._conn.execute(f"VACUUM INTO '{bak}'")
+
+    # ------------------------------------------------------------------
+    # messages helpers
+    # ------------------------------------------------------------------
+
+    async def insert_message(
+        self,
+        *,
+        channel: str,
+        chat_id: str,
+        message_id: str,
+        sender_id: str,
+        content: str,
+        direction: str,
+        group_name: Optional[str] = None,
+        sender_name: Optional[str] = None,
+        status: str = "pending",
+        created_at: Optional[int] = None,
+    ) -> Optional[int]:
+        """Insert a message row; returns rowid or None if duplicate (IGNORE)."""
+        ts = created_at if created_at is not None else int(time.time())
+        async with self._conn.execute(
+            """
+            INSERT OR IGNORE INTO messages
+              (channel, chat_id, message_id, group_name, sender_id, sender_name,
+               content, direction, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (channel, chat_id, message_id, group_name, sender_id, sender_name,
+             content, direction, status, ts),
+        ) as cur:
+            await self._conn.commit()
+            return cur.lastrowid if cur.rowcount else None
+
+    async def get_message(
+        self, *, channel: str, chat_id: str, message_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Fetch a single message by its unique key; returns dict or None."""
+        async with self._conn.execute(
+            "SELECT * FROM messages WHERE channel=? AND chat_id=? AND message_id=?",
+            (channel, chat_id, message_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def update_message_status(
+        self, *, channel: str, chat_id: str, message_id: str, status: str
+    ) -> None:
+        """Update the status of a message."""
+        await self._conn.execute(
+            """
+            UPDATE messages SET status=?, processed_at=?
+            WHERE channel=? AND chat_id=? AND message_id=?
+            """,
+            (status, int(time.time()), channel, chat_id, message_id),
+        )
+        await self._conn.commit()
