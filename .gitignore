@@ -47,6 +47,10 @@ data/audit_log.jsonl
 groups/*/session/
 groups/*/files/
 
+# Spike test artifacts
+spike/test_outbox/
+spike/test_socket/
+
 # Logs
 *.log
 logs/
