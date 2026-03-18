@@ -1,6 +1,6 @@
 # ADR-005: 默认 Ephemeral + 可选 Resumable 容器策略
 
-**状态**：已接受
+**状态**：已接受（Spike S1 验证，2026-03-18 更新）
 **日期**：2026-03-17
 
 ---
@@ -41,3 +41,23 @@ AI Agent 的容器生命周期直接影响安全性、资源消耗和用户体�
 - 宿主 `sessions` 表存储 `(group_name, session_id, last_active)`
 - Agent Runner 执行完毕后返回 `session_id` → 宿主持久化到 DB
 - 下次同 Group 消息 → 读取 `session_id` → 注入容器环境变量 → Agent SDK `resume=`
+
+**SDK 精确 API（Spike S1 验证）**：
+
+```python
+# session_id 获取：从 SystemMessage(subtype="init") 中读取
+async for msg in query(prompt, options):
+    if isinstance(msg, SystemMessage) and msg.subtype == "init":
+        session_id = msg.data["session_id"]   # UUID 格式
+
+# 会话恢复：无需重新指定 allowed_tools，SDK 自动继承原会话配置
+options = ClaudeAgentOptions(resume=session_id)
+```
+
+## 实验验证（Spike S1，2026-03-17）
+
+| 指标 | 结果 |
+| ---- | ---- |
+| session_id 获取 | **PASS** — `SystemMessage(subtype="init")` → `data["session_id"]`，UUID 格式 |
+| 恢复后上下文保留 | **PASS** — 第二次 query 完整回忆第一次对话内容 |
+| allowed_tools 继承 | **PASS** — resume 后无需重新指定，SDK 自动继承 |

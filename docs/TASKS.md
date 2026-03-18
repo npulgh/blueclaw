@@ -128,8 +128,9 @@
 - 消费 JSON-RPC 文件 → 解析 → 分发 → 删除
 - 容器端：MCP stdio server，将 tool 调用写入 outbox/
 - 支持方法：`send_message`, `stream_chunk`
+- **⚠️ 必须同时实现 `on_created` 和 `on_moved`**（见 ADR-001）：容器原子写入触发 `on_moved`，仅实现 `on_created` 会丢失所有原子写入事件
 
-**设计修订**（来源：系统思维 + 反脆弱引擎）：IPC Watcher 增加 5 秒定时扫描兜底，不完全依赖 watchdog 事件通知。watchdog 在 Windows Docker Desktop (WSL2 backend) 上文件事件不可靠是已知问题，定时扫描是"事件驱动 + 轮询兜底"的双保险模式。~5 行。
+**设计修订**（来源：系统思维 + 反脆弱引擎）：IPC Watcher 可增加 5 秒定时扫描作为可选兜底，与事件驱动并行运行。Spike S2 已验证 watchdog 在 Windows Docker Desktop 下零丢失（P99=0.4ms），定时扫描为非必需的防御性措施，约 ~5 行。
 
 **验收**：
 - 手动写入 JSON 文件到 outbox → Watcher 拾取并打印

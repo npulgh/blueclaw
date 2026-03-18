@@ -1,6 +1,6 @@
 # S2: watchdog + Docker Volume 验证
 
-> 状态：待执行
+> 状态：**已完成** ✓ — 四项全部 PASS，结论 GO
 > 执行结果记录在 [findings.md](findings.md) § S2
 
 ---
@@ -45,8 +45,8 @@
 
 ## 执行清单
 
-- [ ] 执行 S2 watchdog 基础事件 → 记录到 findings.md
-- [ ] 执行 S2 延迟测量 → 记录到 findings.md
-- [ ] 执行 S2 高频并发 → 记录到 findings.md
-- [ ] 执行 S2 原子性 → 记录到 findings.md
-- [ ] 在 Windows Docker Desktop (WSL2) 上重复以上测试 → 记录到 findings.md
+- [x] 执行 S2 watchdog 基础事件 → 记录到 findings.md
+- [x] 执行 S2 延迟测量 → 记录到 findings.md
+- [x] 执行 S2 高频并发 → 记录到 findings.md
+- [x] 执行 S2 原子性 → 记录到 findings.md
+- [x] 在 Windows Docker Desktop (WSL2) 上重复以上测试 → 记录到 findings.md

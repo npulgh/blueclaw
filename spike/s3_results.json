@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-03-18T12:17:08.611274",
+  "platform": "Windows 11 Pro / Docker Desktop WSL2",
+  "docker_version": "29.2.1",
+  "tests": {
+    "container_to_container": {
+      "status": "PASS",
+      "rtt_ms": 1.1,
+      "server_output": "server:ok",
+      "error": "",
+      "note": "容器间 Unix Socket 通信成功 RTT=1.1ms"
+    },
+    "host_to_container": {
+      "status": "SKIP",
+      "note": "宿主 Python 不支持 AF_UNIX（无 socket.AF_UNIX 属性）— Windows 平台已知限制"
+    },
+    "latency": {
+      "status": "PASS",
+      "sample_count": 20,
+      "p50_ms": 0.06,
+      "p99_ms": 0.064,
+      "max_ms": 0.132,
+      "note": "P50=0.060ms P99=0.064ms Max=0.132ms"
+    }
+  }
+}

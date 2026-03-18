@@ -1,8 +1,7 @@
 # S3: Unix Socket 跨容器验证（可选）
 
-> 状态：待执行
+> 状态：**已完成** ✓ — 容器间通信 PASS，宿主端 Windows 平台不支持 AF_UNIX
 > 优先级：低 — 此项为 Phase 3 Proxy Sidecar 的前提，非 Phase 1 阻塞项。
-> 如果时间允许，在 Spike 期间一并验证；否则推迟到 Phase 3 前。
 > 执行结果记录在 [findings.md](findings.md) § S3
 
 ---
@@ -30,4 +29,4 @@
 
 ## 执行清单
 
-- [ ] 执行 S3 Unix Socket 验证 → 记录到 findings.md
+- [x] 执行 S3 Unix Socket 验证 → 记录到 findings.md

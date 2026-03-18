@@ -72,7 +72,7 @@
             │  /workspace/project/   (ro)          │
             │  /workspace/global/    (ro)          │
             │  /workspace/ipc/       (rw)          │
-            │  /run/proxy.sock       (rw, 可选)    │
+            │  /proxy/               (rw, 可选)    │
             └──────────────────────────────────────┘
 ```
 
@@ -168,6 +168,7 @@ docker run --rm \
   -v {global_dir}:/workspace/global:ro \
   -v {project_dir}:/workspace/project:ro \
   -v {ipc_dir}:/workspace/ipc:rw \
+  -v {proxy_vol}:/proxy:rw \           # 可选，仅启用 Proxy Sidecar 时挂载
   -e ANTHROPIC_API_KEY \
   -e LYNXCLAW_GROUP={group} \
   -e LYNXCLAW_SESSION_ID={session_id} \
@@ -196,8 +197,22 @@ ENTRYPOINT ["python", "runner/main.py"]
 **文件**：`src/ipc.py`（宿主端），`container/agent-runner/ipc_bridge.py`（容器端）
 
 - **传输**：文件系统 JSON-RPC 2.0，通过 Docker Volume 共享
-- **监听**：宿主端 `watchdog` 事件驱动，毫秒级
+- **监听**：宿主端 `watchdog` 事件驱动，Spike S2 实测 P50=0.2ms / P99=0.4ms
 - **容器端**：MCP stdio server（同进程内运行，无跨容器通信问题）
+
+> **⚠️ 关键实现要求**：宿主 watchdog handler 必须**同时实现 `on_created` 和 `on_moved`**。
+> 容器采用 write-tmp + rename 原子写入，在 Windows 和 Linux 上均触发 `FileMovedEvent`（`on_moved`）。
+> 仅实现 `on_created` 会导致所有原子写入事件 100% 丢失。`on_moved` 中使用 `event.dest_path`。
+>
+> ```python
+> class IPCHandler(FileSystemEventHandler):
+>     def on_created(self, event):   # 直接写入（非原子备用路径）
+>         if not event.is_directory:
+>             self._process(event.src_path)
+>     def on_moved(self, event):     # write-tmp + rename（原子写入主路径）
+>         if not event.is_directory:
+>             self._process(event.dest_path)   # dest_path，不是 src_path
+> ```
 
 #### IPC 目录
 
@@ -232,7 +247,29 @@ data/ipc/{group}/
 
 额外保障：`max_turns=30` 防失控循环，`container.timeout` 秒级硬超时。
 
-Resumable 模式下，runner 返回 `session_id`，宿主存入 `sessions` 表。
+Resumable 模式下，runner 从 `SystemMessage(subtype="init")` 提取 `session_id`，宿主存入 `sessions` 表。
+
+**SDK 实现要点（Spike S1 验证）**：
+
+```python
+# 必须：在宿主环境（Claude Code 进程内）嵌套运行 SDK 时，需绕过嵌套会话检测
+os.environ.pop("CLAUDECODE", None)
+
+# Hook 注册与回调签名
+async def hook_callback(input: TypedDict, tool_use_id: str, context) -> dict:
+    command = input["tool_input"]["command"]
+    if is_dangerous(command):
+        return {"decision": "block", "reason": "blocked by policy"}
+    return {}
+
+ClaudeAgentOptions(
+    hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[hook_callback])]}
+)
+
+# MCP 自定义 Tool 必须用 ClaudeSDKClient（不能用 query()）
+async with ClaudeSDKClient(options=ClaudeAgentOptions(mcp_servers={...})) as client:
+    await client.query(prompt)
+```
 
 ### 3.7 流式响应
 
@@ -251,15 +288,22 @@ Agent 边生成边推送，宿主收到 `stream_chunk` 后转发到 IM：
 
 ### 3.8 网络代理（Proxy Sidecar）
 
-默认 `--network none`。需 Web 搜索时通过 Unix Socket 代理受控出站：
+默认 `--network none`。需 Web 搜索时通过 Unix Socket 代理受控出站。
+
+> **Spike S3 确认**：Proxy Sidecar 必须是**容器**（Linux 环境），不能是 Windows 宿主进程。
+> Windows Python 无 `socket.AF_UNIX`，宿主进程无法创建 Unix Socket 服务端。
 
 ```text
-容器内 Agent → HTTP_PROXY=socks5h://proxy → /run/proxy.sock
-  ↓ (Unix Socket)
-宿主 lynxclaw-proxy → 域名白名单 + 请求日志 + 速率限制
+agent 容器 (--network none)
+    └─ HTTP_PROXY=http://proxy → /proxy/proxy.sock
+             ↑ Docker Volume 共享（proxy_vol:/proxy）
+Proxy Sidecar 容器 (lynxclaw-proxy, --network bridge)
+    └─ 监听 /proxy/proxy.sock → 域名白名单 + 请求日志 + 速率限制
+    └─ 出站请求 → Internet（仅白名单域名）
 ```
 
 即使 Agent 被 prompt injection 劫持，也无法访问白名单外的域名。
+Unix Socket RTT P50=0.060ms / P99=0.064ms（Spike S3 实测），对代理链路性能无影响。
 
 ### 3.9 可观测性
 
