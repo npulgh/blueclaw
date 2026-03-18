@@ -196,3 +196,43 @@ class Database:
             (status, int(time.time()), channel, chat_id, message_id),
         )
         await self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # groups helpers
+    # ------------------------------------------------------------------
+
+    async def upsert_group(
+        self,
+        *,
+        name: str,
+        channel: str,
+        chat_id: str,
+        is_main: bool = False,
+        trigger: str = "@bot",
+    ) -> None:
+        """Insert or replace a group row (upsert by primary key)."""
+        ts = int(time.time())
+        await self._conn.execute(
+            """
+            INSERT INTO groups (name, channel, chat_id, is_main, trigger, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+              channel=excluded.channel,
+              chat_id=excluded.chat_id,
+              is_main=excluded.is_main,
+              trigger=excluded.trigger
+            """,
+            (name, channel, chat_id, int(is_main), trigger, ts),
+        )
+        await self._conn.commit()
+
+    async def get_group_by_chat(
+        self, *, channel: str, chat_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Fetch a group by channel + chat_id; returns dict or None."""
+        async with self._conn.execute(
+            "SELECT * FROM groups WHERE channel=? AND chat_id=?",
+            (channel, chat_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
