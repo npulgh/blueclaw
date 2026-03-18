@@ -89,7 +89,22 @@ def _mock_db() -> MagicMock:
     db.get_session = AsyncMock(return_value=None)
     db.save_session = AsyncMock()
     db.update_message_status = AsyncMock()
+    db.get_token_usage = AsyncMock(return_value={"input_tokens": 0, "output_tokens": 0})
+    db.record_token_usage = AsyncMock()
     return db
+
+
+def _mock_obs() -> MagicMock:
+    """Create a mock Observability object with the metrics stubs needed by _group_consumer."""
+    obs = MagicMock()
+    obs.messages_total = MagicMock()
+    obs.messages_total.labels = MagicMock(return_value=MagicMock())
+    obs.active_containers = MagicMock()
+    obs.container_duration_seconds = MagicMock()
+    obs.container_duration_seconds.labels = MagicMock(return_value=MagicMock())
+    obs.tokens_total = MagicMock()
+    obs.tokens_total.labels = MagicMock(return_value=MagicMock())
+    return obs
 
 
 def _mock_adapter() -> MagicMock:
@@ -166,6 +181,7 @@ class TestIPCDispatch:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
 
         adapter.send_message.assert_awaited_once_with(
@@ -190,6 +206,7 @@ class TestIPCDispatch:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
 
         # Debouncer with chars=1 flushes immediately → send_message called
@@ -217,6 +234,7 @@ class TestIPCDispatch:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
 
         # Debouncer flushes " world"; flush_cb appends to existing buffer "Hello"
@@ -244,6 +262,7 @@ class TestIPCDispatch:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
 
         assert "g1" not in stream.stream_msg_id
@@ -266,6 +285,7 @@ class TestIPCDispatch:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
         # No adapter calls
         reg.get.return_value.send_message.assert_not_awaited()
@@ -298,6 +318,7 @@ class TestStreamingDebounce:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
 
         # No IM call yet — chunk is buffered
@@ -328,6 +349,7 @@ class TestStreamingDebounce:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
 
         # Placeholder exists → edit_message used
@@ -357,6 +379,7 @@ class TestStreamingDebounce:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
 
         adapter.edit_message.assert_awaited_once_with(
@@ -388,6 +411,7 @@ class TestStreamingDebounce:
             registry=reg,
             stream=stream,
             debouncer=debouncer,
+            db=_mock_db(),
         )
 
         adapter.send_message.assert_awaited_once()
@@ -438,6 +462,7 @@ class TestGroupConsumer:
                 stream=stream,
                 is_main=False,
                 db=_mock_db(),
+                obs=_mock_obs(),
             )
         )
 
@@ -494,6 +519,7 @@ class TestGroupConsumer:
                 stream=stream,
                 is_main=False,
                 db=_mock_db(),
+                obs=_mock_obs(),
             )
         )
 
@@ -544,6 +570,7 @@ class TestGroupConsumer:
                 stream=stream,
                 is_main=False,
                 db=_mock_db(),
+                obs=_mock_obs(),
             )
         )
 
@@ -589,6 +616,7 @@ class TestGroupConsumer:
                 stream=stream,
                 is_main=False,
                 db=_mock_db(),
+                obs=_mock_obs(),
             )
         )
 
@@ -636,6 +664,7 @@ class TestGroupConsumer:
                 stream=stream,
                 is_main=True,
                 db=_mock_db(),
+                obs=_mock_obs(),
             )
         )
 
@@ -690,6 +719,11 @@ class TestMainLifecycle:
             patch("src.main.MessageRouter") as MockRouter,
             patch("src.main.ContainerManager") as MockCM,
             patch("src.main.IPCWatcher") as MockIPC,
+            patch("src.main.Observability") as MockObs,
+            patch("src.main.StreamDebouncer") as MockDebouncer,
+            patch("src.main.TaskScheduler") as MockScheduler,
+            patch("src.main.ProxySidecar") as MockProxy,
+            patch("src.main.ensure_group_dirs"),
         ):
             db_inst = MockDB.return_value
             db_inst.init = AsyncMock()
@@ -718,6 +752,28 @@ class TestMainLifecycle:
             ipc_inst.init = AsyncMock()
             ipc_inst.start = AsyncMock()
             ipc_inst.stop = AsyncMock()
+
+            obs_inst = MockObs.return_value
+            obs_inst.init = MagicMock()
+            obs_inst.stop = MagicMock()
+            obs_inst.start_event_loop_monitor = AsyncMock()
+            obs_inst.stop_event_loop_monitor = MagicMock()
+            MockObs.setup_logging = MagicMock()
+
+            debouncer_inst = MockDebouncer.return_value
+            debouncer_inst.set_flush_callback = MagicMock()
+            debouncer_inst.start = AsyncMock()
+            debouncer_inst.stop = AsyncMock()
+
+            scheduler_inst = MockScheduler.return_value
+            scheduler_inst.init = AsyncMock()
+            scheduler_inst.start = AsyncMock()
+            scheduler_inst.stop = AsyncMock()
+
+            proxy_inst = MockProxy.return_value
+            proxy_inst.init = MagicMock()
+            proxy_inst.start = AsyncMock()
+            proxy_inst.stop = AsyncMock()
 
             # Run main in a task, then trigger shutdown after a short delay
             async def trigger_shutdown():
@@ -793,6 +849,7 @@ class TestSessionFlow:
                 stream=stream,
                 is_main=False,
                 db=db,
+                obs=_mock_obs(),
             )
         )
 
@@ -851,6 +908,7 @@ class TestSessionFlow:
                     stream=stream,
                     is_main=False,
                     db=db,
+                    obs=_mock_obs(),
                 )
             )
 
@@ -912,6 +970,7 @@ class TestBudgetEnforcement:
                 stream=stream,
                 is_main=False,
                 db=db,
+                obs=_mock_obs(),
                 token_budget=500,  # budget of 500 total tokens
             )
         )
@@ -970,6 +1029,7 @@ class TestBudgetEnforcement:
                 stream=stream,
                 is_main=False,
                 db=db,
+                obs=_mock_obs(),
                 token_budget=0,  # unlimited
             )
         )
@@ -1025,6 +1085,7 @@ class TestBudgetEnforcement:
                 stream=stream,
                 is_main=False,
                 db=db,
+                obs=_mock_obs(),
                 token_budget=500,
             )
         )
@@ -1087,6 +1148,7 @@ class TestBudgetEnforcement:
                     stream=stream,
                     is_main=False,
                     db=db,
+                    obs=_mock_obs(),
                     token_budget=0,
                 )
             )
