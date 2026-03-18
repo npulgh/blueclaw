@@ -27,10 +27,12 @@
 
 ---
 
-## Phase 1 — MVP（Telegram 端到端）
+## Phase 1 — MVP（Telegram 端到端） ✅ COMPLETED
 
 > 目标：一条 Telegram 消息进来，Agent 在容器里处理，回复发回 Telegram。
 > **depends**: T0.1, T0.2（Spike 验证通过后方可开始）
+>
+> **完成日期**: 2026-03-18 | **测试**: 135/135 通过 | **提交**: 8781337..6904001
 
 ### T1.1 项目脚手架
 
