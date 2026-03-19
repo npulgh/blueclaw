@@ -1,35 +1,32 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
 
 ## Project Status
 
-**Lynxclaw is in the design/planning phase.** No source code exists yet. The repository contains only design documents and research notes. Implementation starts from T1.1 in `docs/TASKS.md`.
+**Lynxclaw MVP is complete.** All 4 phases implemented and tested (2026-03-19). 381 unit/integration tests pass, 2 skipped (Windows symlink). E2E test suite exists (`tests/test_e2e_local.py`) with 6/8 passing (2 depend on live API availability).
 
 ## What This Project Is
 
-**Lynxclaw** is a lightweight AI agent runtime platform. It runs Anthropic Claude Agents inside hardened Docker containers and connects them to IM platforms (Telegram + Feishu). The guiding principles are: container-as-security-boundary, defense in depth, streaming-first responses, and a codebase small enough to audit (≤ 5,000 lines).
+**Lynxclaw** is a lightweight AI agent runtime platform. It runs Anthropic Claude Agents inside hardened Docker containers and connects them to IM platforms (Telegram + Feishu). The guiding principles are: container-as-security-boundary, defense in depth, streaming-first responses, and a codebase small enough to audit.
+
+## Development Commands
+
+```bash
+python -m src.main                                              # Start the host process
+python -m pytest tests/                                         # Run all tests (381 pass, ~17s)
+python -m pytest tests/ --ignore=tests/test_e2e_local.py        # Unit/integration only (no Docker needed)
+python -m pytest tests/test_e2e_local.py                        # E2E (requires Docker + API key)
+docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .  # Build agent image
+```
 
 ## Key Design Documents
 
-Read these before implementing anything:
-
-- `docs/ARCHITECTURE.md` — component design, security model, data schema, directory structure, config schema. **Start here.**
-- `docs/TASKS.md` — phased task list with acceptance criteria and inter-task dependencies. Each task is the unit of work.
-- `docs/adr/` — architecture decision records explaining *why* key decisions were made.
-- `notes/nanoclaw-architecture.md` — analysis of NanoClaw (TypeScript), the reference implementation Lynxclaw improves upon.
-
-## Development Workflow
-
-Tasks are defined in `docs/TASKS.md` and must be done sequentially within each phase (dependencies are marked `depends:`). Do one task at a time, run its acceptance tests, then move to the next.
-
-**Once the project scaffold exists**, the expected commands will be:
-```bash
-python -m src.main           # Start the host process
-python -m pytest tests/      # Run all tests
-python -m pytest tests/test_db.py   # Run a single test file
-docker build -t lynxclaw-agent:latest container/agent-runner/   # Build agent image
-```
+- `docs/ARCHITECTURE.md` — component design, security model, data schema, directory structure
+- `docs/TASKS.md` — phased task list with acceptance criteria (Phase 1-4 complete, backlog at bottom)
+- `docs/adr/` — architecture decision records explaining *why* key decisions were made
+- `docs/E2E-TESTING.md` — E2E testing strategy and runbook
+- `docs/adr/ADR-005-container-hardening-lessons.md` — container hardening lessons learned
 
 ## Technology Stack
 
@@ -47,30 +44,36 @@ docker build -t lynxclaw-agent:latest container/agent-runner/   # Build agent im
 | HTTP (optional) | `fastapi` + `uvicorn` |
 | Scheduling | `croniter` + asyncio |
 
-## Planned Directory Structure
+## Directory Structure
 
 ```
 src/
-  main.py                 # Host orchestrator (asyncio, graceful shutdown)
+  main.py                 # Host orchestrator (713 LOC, asyncio, graceful shutdown)
   config.py               # YAML + .env config loading
   router.py               # Message routing (idempotency + backpressure)
   container_manager.py    # Container lifecycle (hardened + concurrency)
-  ipc.py                  # IPC Watcher (watchdog-based, streaming dispatch)
-  db.py                   # SQLite + migrations
+  ipc.py                  # IPC Watcher (watchdog on_created + on_moved)
+  db.py                   # SQLite + migrations, 6 tables, schema v2
   scheduler.py            # Cron task scheduler
   proxy.py                # Network proxy sidecar
   observability.py        # structlog + Prometheus metrics
   types.py                # Global dataclasses
+  memory.py               # Agent memory management
+  stream_debouncer.py     # Streaming debounce (500ms / 200 chars)
+  swarm.py                # Multi-agent swarm coordination
+  persistent_container.py # Long-running container mode
   channels/
-    registry.py           # Adapter factory/registry
+    registry.py           # Adapter factory/registry + ChannelAdapter ABC
     telegram.py           # aiogram v3 adapter
-    feishu.py             # lark-oapi adapter
-  server.py               # FastAPI (webhook + /metrics, optional)
+    feishu.py             # lark-oapi WebSocket adapter
+    example_adapter.py    # Mock adapter for testing
+  server.py               # FastAPI (webhook + /metrics)
 container/agent-runner/
   Dockerfile              # python:3.11-slim, non-root user 1000
   requirements.txt        # claude-agent-sdk + deps
-  main.py                 # Agent entry point + hooks
-  ipc_bridge.py           # MCP stdio server → IPC files
+  main.py                 # Agent entry point + hooks + streaming
+  ipc_bridge.py           # JSON-RPC file writer (atomic write)
+  api_proxy.py            # HTTP proxy for Anthropic-compatible endpoints
 groups/
   CLAUDE.md               # Global memory (all groups read-only; main group can write)
   {group-name}/CLAUDE.md  # Group-specific memory (agent read/write)
@@ -97,13 +100,21 @@ data/
 Every agent container must be launched with these flags (defined in `container_manager.py`):
 ```bash
 --cap-drop ALL --security-opt no-new-privileges:true --read-only
---tmpfs /tmp:rw,noexec,nosuid,size=256m --pids-limit 256
---user 1000:1000 --network none --memory 512m --cpus 1.0
+--tmpfs /tmp:rw,nosuid,size=256m
+--tmpfs /home/agent:rw,nosuid,size=64m,uid=1000,gid=1000
+--pids-limit 256 --user 1000:1000 --network none --memory 512m --cpus 1.0
 ```
 
-Mounts: `groups/{group}/` (rw), `groups/` (ro, global), project dir (ro, main group only), `data/ipc/{group}/` (rw).
+Key hardening notes (see `docs/adr/ADR-005-container-hardening-lessons.md`):
 
-Credentials passed to containers: `ANTHROPIC_API_KEY` only. IM tokens never enter containers.
+- `/tmp` tmpfs omits `noexec` — Node.js JIT requires executable memory mappings
+- `/home/agent` tmpfs required — Claude Code CLI writes `~/.claude.json` on startup
+- All volume mount points must pre-exist in Dockerfile (`mkdir -p`)
+- `ANTHROPIC_BASE_URL` must be explicitly forwarded to containers
+
+Mounts: `data/ipc/` (rw), `groups/{group}/` (rw), `groups/` (ro, global), project dir (ro, main group only).
+
+Credentials passed to containers: `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL` if set). IM tokens never enter containers.
 
 ## Key Interfaces
 
@@ -118,7 +129,7 @@ def capabilities() -> ChannelCapabilities
 
 **IPC methods** (container → host via outbox files):
 - `stream_chunk` — streaming text chunk (has `is_final` flag)
-- `send_message` — complete message
+- `send_message` — complete message (also used as fallback when streaming returns empty)
 - `schedule_task` / `list_tasks` / `cancel_task` / `read_context`
 
 **Streaming debounce**: flush every 500 ms or 200 characters, whichever comes first.
