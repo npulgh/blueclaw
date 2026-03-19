@@ -127,3 +127,101 @@ def stream_chunk(
     outbox = _get_outbox(group, ipc_base)
     _write_atomic(outbox, payload)
     return rpc_id
+
+
+def schedule_task(
+    group: str,
+    task_id: str,
+    schedule: str,
+    prompt: str,
+    task_type: str = "cron",
+    ipc_base: Optional[str] = None,
+) -> str:
+    """Request the host to create a new scheduled task.
+
+    Args:
+        group: Group name owning the task.
+        task_id: Unique identifier for the task (e.g. UUID).
+        schedule: Cron expression (e.g. '*/5 * * * *').
+        prompt: Prompt text to execute when the task fires.
+        task_type: Task type string (default: 'cron').
+        ipc_base: Override for the IPC base directory.
+
+    Returns:
+        UUID string identifying this IPC request.
+    """
+    rpc_id = str(uuid.uuid4())
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "schedule_task",
+        "params": {
+            "group": group,
+            "task_id": task_id,
+            "schedule": schedule,
+            "prompt": prompt,
+            "type": task_type,
+        },
+        "id": rpc_id,
+    }
+    outbox = _get_outbox(group, ipc_base)
+    _write_atomic(outbox, payload)
+    return rpc_id
+
+
+def list_tasks(
+    group: str,
+    ipc_base: Optional[str] = None,
+) -> str:
+    """Request the host to list all tasks for a group.
+
+    The host writes the result as a JSON-RPC response to the group inbox.
+
+    Args:
+        group: Group name.
+        ipc_base: Override for the IPC base directory.
+
+    Returns:
+        UUID RPC ID that will be used as the inbox result filename.
+    """
+    rpc_id = str(uuid.uuid4())
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "list_tasks",
+        "params": {
+            "group": group,
+        },
+        "id": rpc_id,
+    }
+    outbox = _get_outbox(group, ipc_base)
+    _write_atomic(outbox, payload)
+    return rpc_id
+
+
+def cancel_task(
+    group: str,
+    task_id: str,
+    ipc_base: Optional[str] = None,
+) -> str:
+    """Request the host to cancel (deactivate) a scheduled task.
+
+    Args:
+        group: Group name owning the task.
+        task_id: ID of the task to cancel.
+        ipc_base: Override for the IPC base directory.
+
+    Returns:
+        UUID string identifying this IPC request.
+    """
+    rpc_id = str(uuid.uuid4())
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "cancel_task",
+        "params": {
+            "group": group,
+            "task_id": task_id,
+        },
+        "id": rpc_id,
+    }
+    outbox = _get_outbox(group, ipc_base)
+    _write_atomic(outbox, payload)
+    return rpc_id

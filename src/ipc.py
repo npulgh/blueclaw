@@ -28,7 +28,13 @@ log = structlog.get_logger(__name__)
 DispatchCallback = Callable[[str, dict, str], Coroutine]
 
 # Supported IPC methods (container → host)
-VALID_METHODS = frozenset({"send_message", "stream_chunk"})
+VALID_METHODS = frozenset({
+    "send_message",
+    "stream_chunk",
+    "schedule_task",
+    "list_tasks",
+    "cancel_task",
+})
 
 
 class _OutboxEventHandler(FileSystemEventHandler):

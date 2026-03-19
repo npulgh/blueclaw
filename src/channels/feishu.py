@@ -48,13 +48,17 @@ class FeishuAdapter(ChannelAdapter):
         self._handler: Optional[MessageHandler] = None
         self._ws_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._mode: str = "websocket"
+        self._event_handler: Optional[lark.EventDispatcherHandler] = None
 
     async def init(self, config: FeishuConfig) -> None:
-        """Create lark REST client and configure WebSocket client."""
+        """Create lark REST client and configure WebSocket client or webhook handler."""
         if not config.app_id:
             raise ValueError("FeishuConfig.app_id is required")
         if not config.app_secret:
             raise ValueError("FeishuConfig.app_secret is required")
+
+        self._mode = config.mode
 
         self._client = (
             lark.Client.builder()
@@ -63,23 +67,30 @@ class FeishuAdapter(ChannelAdapter):
             .build()
         )
 
-        event_handler = (
+        self._event_handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._on_feishu_message)
             .build()
         )
 
-        self._ws_client = lark.ws.Client(
-            app_id=config.app_id,
-            app_secret=config.app_secret,
-            event_handler=event_handler,
-            log_level=lark.LogLevel.WARNING,
-        )
+        if self._mode == "websocket":
+            self._ws_client = lark.ws.Client(
+                app_id=config.app_id,
+                app_secret=config.app_secret,
+                event_handler=self._event_handler,
+                log_level=lark.LogLevel.WARNING,
+            )
 
-        logger.info("feishu_adapter_initialized")
+        logger.info("feishu_adapter_initialized", mode=self._mode)
 
     async def start(self) -> None:
-        """Start WebSocket connection in a background thread."""
+        """Start WebSocket connection (websocket mode) or no-op (webhook mode)."""
+        if self._mode == "webhook":
+            # Webhook mode: events arrive via feed_webhook_event()
+            self._loop = asyncio.get_running_loop()
+            logger.info("feishu_webhook_mode_ready")
+            return
+
         if self._ws_client is None:
             raise RuntimeError("Call init() before start()")
 
@@ -95,12 +106,28 @@ class FeishuAdapter(ChannelAdapter):
 
     async def stop(self) -> None:
         """Stop the WebSocket thread (daemon thread exits with process)."""
-        # lark-oapi ws.Client has no explicit stop/close API.
-        # The thread is daemon=True so it will exit when the process ends.
-        # We just clear references and let the thread die naturally.
         self._ws_thread = None
         self._ws_client = None
-        logger.info("feishu_ws_stopped")
+        logger.info("feishu_adapter_stopped")
+
+    async def feed_webhook_event(self, event_data: dict) -> None:
+        """Process a raw Feishu event dict received via webhook.
+
+        Called by WebhookServer for each incoming event callback.
+        """
+        if self._event_handler is None:
+            raise RuntimeError("Adapter not initialised")
+
+        # Feishu webhook events have a 'header' + 'event' structure.
+        # We extract the message event and dispatch it directly.
+        header = event_data.get("header", {})
+        event_type = header.get("event_type", "")
+
+        if event_type == "im.message.receive_v1":
+            event_body = event_data.get("event", {})
+            await self._dispatch_raw_event(event_body)
+        else:
+            logger.debug("feishu_webhook_unhandled_event", event_type=event_type)
 
     def on_message(self, handler: MessageHandler) -> None:
         """Register the callback for incoming messages."""
@@ -230,6 +257,44 @@ class FeishuAdapter(ChannelAdapter):
             logger.exception(
                 "feishu_dispatch_error", message_id=incoming.message_id
             )
+
+    async def _dispatch_raw_event(self, event_body: dict) -> None:
+        """Parse a raw Feishu event body dict and dispatch as IncomingMessage."""
+        if self._handler is None:
+            return
+
+        try:
+            message_data = event_body.get("message", {})
+            sender_data = event_body.get("sender", {})
+
+            raw_content = message_data.get("content", "{}")
+            try:
+                parsed = json.loads(raw_content)
+                text = parsed.get("text", "")
+            except (json.JSONDecodeError, AttributeError):
+                text = raw_content
+
+            sender_id_data = sender_data.get("sender_id", {})
+            sender_id = sender_id_data.get("open_id", "unknown")
+
+            create_time = message_data.get("create_time")
+            timestamp = int(create_time) // 1000 if create_time else 0
+
+            incoming = IncomingMessage(
+                channel="feishu",
+                message_id=message_data.get("message_id", ""),
+                chat_id=message_data.get("chat_id", ""),
+                sender_id=sender_id,
+                sender_name="unknown",
+                text=text,
+                attachments=[],
+                timestamp=timestamp,
+                raw=event_body,
+            )
+
+            await self._dispatch(incoming)
+        except Exception:
+            logger.exception("feishu_webhook_dispatch_error")
 
 
 # ---------------------------------------------------------------------------

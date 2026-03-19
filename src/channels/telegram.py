@@ -84,6 +84,7 @@ class TelegramAdapter(ChannelAdapter):
         self._dp: Optional[Dispatcher] = None
         self._handler: Optional[MessageHandler] = None
         self._polling_task: Optional[asyncio.Task] = None
+        self._mode: str = "polling"
         # 30 edits/sec global Telegram limit; capacity=30 allows short bursts
         self._edit_limiter = TokenBucket(rate=30.0, capacity=30)
 
@@ -91,6 +92,8 @@ class TelegramAdapter(ChannelAdapter):
         """Create Bot and Dispatcher from config."""
         if not config.bot_token:
             raise ValueError("TelegramConfig.bot_token is required")
+
+        self._mode = config.mode
 
         self._bot = Bot(
             token=config.bot_token,
@@ -100,12 +103,17 @@ class TelegramAdapter(ChannelAdapter):
 
         # Register the message handler on the dispatcher
         self._dp.message.register(self._on_aiogram_message)
-        logger.info("telegram_adapter_initialized")
+        logger.info("telegram_adapter_initialized", mode=self._mode)
 
     async def start(self) -> None:
-        """Start Long Polling in a background asyncio task."""
+        """Start Long Polling (polling mode) or no-op (webhook mode)."""
         if self._bot is None or self._dp is None:
             raise RuntimeError("Call init() before start()")
+
+        if self._mode == "webhook":
+            # Webhook mode: the WebhookServer feeds updates via feed_webhook_update()
+            logger.info("telegram_webhook_mode_ready")
+            return
 
         self._polling_task = asyncio.create_task(
             self._dp.start_polling(self._bot, handle_signals=False),
@@ -115,7 +123,7 @@ class TelegramAdapter(ChannelAdapter):
 
     async def stop(self) -> None:
         """Stop polling and close the bot session."""
-        if self._dp is not None:
+        if self._mode == "polling" and self._dp is not None:
             await self._dp.stop_polling()
 
         if self._polling_task is not None:
@@ -129,7 +137,22 @@ class TelegramAdapter(ChannelAdapter):
         if self._bot is not None:
             await self._bot.session.close()
 
-        logger.info("telegram_polling_stopped")
+        logger.info("telegram_adapter_stopped")
+
+    async def set_webhook(self, url: str) -> None:
+        """Configure Telegram to send updates to the given webhook URL."""
+        if self._bot is None:
+            raise RuntimeError("Adapter not initialised")
+        await self._bot.set_webhook(url)
+        logger.info("telegram_webhook_set", url=url)
+
+    async def feed_webhook_update(self, update_data: dict) -> None:
+        """Feed a raw Telegram update dict to the aiogram dispatcher."""
+        if self._bot is None or self._dp is None:
+            raise RuntimeError("Adapter not initialised")
+        from aiogram.types import Update
+        update = Update.model_validate(update_data)
+        await self._dp.feed_update(self._bot, update)
 
     def on_message(self, handler: MessageHandler) -> None:
         """Register the callback for incoming messages."""

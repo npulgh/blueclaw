@@ -9,44 +9,31 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
-import logging
 import os
 import signal
-import sys
+import time
 from pathlib import Path
 from typing import Callable, Coroutine, Optional
 
 import structlog
 
-from src.channels.feishu import FeishuAdapter
-from src.channels.registry import ChannelRegistry
-from src.channels.telegram import TelegramAdapter
+from src.channels.registry import ChannelRegistry, discover_adapters
 from src.config import Config, load_config
 from src.container_manager import ContainerManager
 from src.db import Database
 from src.ipc import IPCWatcher
 from src.memory import ensure_group_dirs, get_global_memory_path
+from src.observability import Observability, new_correlation_id
+from src.proxy import ProxySidecar
 from src.router import MessageRouter, RouteResult
+from src.scheduler import TaskScheduler
+from src.server import WebhookServer
 from src.stream_debouncer import StreamDebouncer
 from src.types import IncomingMessage, OutgoingMessage
 
 log = structlog.get_logger(__name__)
 
 
-def _setup_logging(level: str = "info") -> None:
-    structlog.configure(
-        processors=[
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.dev.ConsoleRenderer(),
-        ],
-        wrapper_class=structlog.stdlib.BoundLogger,
-        context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
-    )
-    numeric = getattr(logging, level.upper(), logging.INFO)
-    logging.basicConfig(stream=sys.stdout, level=numeric, force=True)
 
 
 # ---------------------------------------------------------------------------
@@ -91,9 +78,65 @@ async def _ipc_dispatch(
     registry: ChannelRegistry,
     stream: _StreamState,
     debouncer: StreamDebouncer,
+    db: Database,
 ) -> None:
     """Handle IPC messages from containers and deliver to IM."""
     group = params.get("group", "")
+
+    # --- Task management methods (no active session required) ---
+    if method == "schedule_task":
+        import uuid as _uuid
+        task_id = params.get("task_id") or str(_uuid.uuid4())
+        schedule = params.get("schedule", "")
+        prompt = params.get("prompt", "")
+        task_type = params.get("type", "cron")
+        if not schedule or not prompt:
+            log.warning("ipc.schedule_task.missing_params", group=group, params=params)
+            return
+        try:
+            await db.create_task(
+                id=task_id,
+                group_name=group,
+                type=task_type,
+                schedule=schedule,
+                prompt=prompt,
+            )
+            log.info("ipc.schedule_task.created", group=group, task_id=task_id, schedule=schedule)
+        except Exception as exc:
+            log.error("ipc.schedule_task.error", group=group, error=str(exc))
+        return
+
+    elif method == "list_tasks":
+        try:
+            tasks = await db.list_tasks(group_name=group)
+            # Write result to group inbox so agent can read it
+            import json as _json
+            cwd = __import__("os").getcwd()
+            inbox_dir = __import__("pathlib").Path(cwd) / "data" / "ipc" / group / "inbox"
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            result_file = inbox_dir / f"{rpc_id or 'list_tasks'}.json"
+            result_file.write_text(
+                _json.dumps({"jsonrpc": "2.0", "id": rpc_id, "result": tasks}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            log.info("ipc.list_tasks.written", group=group, count=len(tasks), file=str(result_file))
+        except Exception as exc:
+            log.error("ipc.list_tasks.error", group=group, error=str(exc))
+        return
+
+    elif method == "cancel_task":
+        task_id = params.get("task_id", "")
+        if not task_id:
+            log.warning("ipc.cancel_task.missing_task_id", group=group)
+            return
+        try:
+            await db.cancel_task(task_id=task_id)
+            log.info("ipc.cancel_task.done", group=group, task_id=task_id)
+        except Exception as exc:
+            log.error("ipc.cancel_task.error", group=group, error=str(exc))
+        return
+
+    # --- IM delivery methods (require active session) ---
     channel_name = stream.active_channel.get(group)
     chat_id = stream.active_chat.get(group)
 
@@ -199,6 +242,7 @@ async def _group_consumer(
     stream: _StreamState,
     is_main: bool,
     db: Database,
+    obs: "Observability",
     token_budget: int = 0,
 ) -> None:
     """Consume messages from a group queue, spawn containers, handle errors."""
@@ -268,6 +312,8 @@ async def _group_consumer(
         )
 
         # Spawn container
+        _t_spawn = time.monotonic()
+        obs.active_containers.inc()
         try:
             session_id = await db.get_session(group_name=group_name)
             result = await container_mgr.spawn(
@@ -279,6 +325,10 @@ async def _group_consumer(
                 session_id=session_id,
             )
         except Exception:
+            obs.active_containers.dec()
+            obs.container_duration_seconds.labels(
+                group=group_name, status="error"
+            ).observe(time.monotonic() - _t_spawn)
             log.exception("consumer.spawn_error", group=group_name)
             await db.update_message_status(
                 channel=msg.channel,
@@ -290,8 +340,14 @@ async def _group_consumer(
             stream.clear(group_name)
             continue
 
+        obs.active_containers.dec()
+        _duration = time.monotonic() - _t_spawn
+
         # Handle container failure / timeout
         if result.timed_out:
+            obs.container_duration_seconds.labels(
+                group=group_name, status="timeout"
+            ).observe(_duration)
             log.warning("consumer.timeout", group=group_name)
             await db.update_message_status(
                 channel=msg.channel,
@@ -301,6 +357,9 @@ async def _group_consumer(
             )
             await _send_error(registry, msg.channel, msg.chat_id, _ERR_TIMEOUT)
         elif result.exit_code != 0:
+            obs.container_duration_seconds.labels(
+                group=group_name, status="failed"
+            ).observe(_duration)
             log.error(
                 "consumer.nonzero_exit",
                 group=group_name,
@@ -315,6 +374,9 @@ async def _group_consumer(
             )
             await _send_error(registry, msg.channel, msg.chat_id, _ERR_CONTAINER)
         else:
+            obs.container_duration_seconds.labels(
+                group=group_name, status="success"
+            ).observe(_duration)
             # Successful run — record token usage then persist session_id
             cwd = os.getcwd()
             ipc_group_dir = os.path.join(cwd, "data", "ipc", group_name)
@@ -327,16 +389,20 @@ async def _group_consumer(
                 )
                 token_data = json.loads(raw)
                 await asyncio.to_thread(os.unlink, token_usage_file)
+                in_tok = int(token_data.get("input_tokens", 0))
+                out_tok = int(token_data.get("output_tokens", 0))
                 await db.record_token_usage(
                     group_name=group_name,
-                    input_tokens=int(token_data.get("input_tokens", 0)),
-                    output_tokens=int(token_data.get("output_tokens", 0)),
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
                 )
+                obs.tokens_total.labels(group=group_name, type="input").inc(in_tok)
+                obs.tokens_total.labels(group=group_name, type="output").inc(out_tok)
                 log.info(
                     "tokens.recorded",
                     group=group_name,
-                    input=token_data.get("input_tokens", 0),
-                    output=token_data.get("output_tokens", 0),
+                    input=in_tok,
+                    output=out_tok,
                 )
             except FileNotFoundError:
                 pass  # agent didn't write token_usage.json (e.g. mock/test path)
@@ -387,7 +453,10 @@ async def _send_error(
 async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     """Start Lynxclaw: load config, init components, run until shutdown."""
     config = load_config(config_path)
-    _setup_logging(config.host.log_level)
+    Observability.setup_logging(config.host.log_level)
+
+    obs = Observability()
+    obs.init(port=getattr(config.host, "metrics_port", 9090))
 
     log.info("lynxclaw.starting")
 
@@ -403,15 +472,13 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     await db.init(config.db_path)
 
     registry = ChannelRegistry()
-    if config.telegram.enabled:
-        tg = TelegramAdapter()
-        await tg.init(config.telegram)
-        registry.register("telegram", tg)
-
-    if config.feishu.enabled:
-        feishu = FeishuAdapter()
-        await feishu.init(config.feishu)
-        registry.register("feishu", feishu)
+    _channel_config_map = {
+        "telegram": config.telegram,
+        "feishu": config.feishu,
+    }
+    for _name, _adapter in discover_adapters(config).items():
+        await _adapter.init(_channel_config_map[_name])
+        registry.register(_name, _adapter)
 
     router = MessageRouter()
     await router.init(db, config)
@@ -419,7 +486,16 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     container_mgr = ContainerManager()
     container_mgr.init(config.container, config.security)
 
+    # --- Proxy sidecar (optional, only started when config.proxy.enabled) ---
+    proxy_sidecar = ProxySidecar()
+    proxy_sidecar.init(config.proxy, runtime=config.container.runtime)
+    if config.proxy.enabled:
+        await proxy_sidecar.start()
+
     stream = _StreamState()
+
+    # Task scheduler
+    scheduler = TaskScheduler()
 
     # Streaming debouncer — flush every 500 ms or 200 chars, whichever first
     debouncer = StreamDebouncer(
@@ -436,6 +512,7 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
             registry=registry,
             stream=stream,
             debouncer=debouncer,
+            db=db,
         )
 
     ipc = IPCWatcher()
@@ -443,9 +520,11 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
 
     # Wire message handler: adapter.on_message → router.route
     async def on_incoming(msg: IncomingMessage) -> None:
+        new_correlation_id()  # assign a fresh correlation ID for this request
         result = await router.route(msg)
         log.info("message.routed", result=result.name, channel=msg.channel,
                  message_id=msg.message_id)
+        obs.messages_total.labels(channel=msg.channel, direction="inbound").inc()
 
     for name in registry.names:
         registry.get(name).on_message(on_incoming)
@@ -460,9 +539,30 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     if recovered:
         log.info("startup.recovery", recovered=recovered)
 
+    # --- Webhook server (started if any adapter uses webhook mode) ---
+    webhook_server: Optional[WebhookServer] = None
+    needs_webhook = (
+        (config.telegram.enabled and config.telegram.mode == "webhook") or
+        (config.feishu.enabled and config.feishu.mode == "webhook")
+    )
+    if needs_webhook:
+        webhook_server = WebhookServer()
+        if config.telegram.enabled and config.telegram.mode == "webhook":
+            tg_adapter = registry.get("telegram")
+            webhook_server.setup_telegram(tg_adapter)
+        if config.feishu.enabled and config.feishu.mode == "webhook":
+            feishu_adapter = registry.get("feishu")
+            webhook_server.setup_feishu(feishu_adapter)
+        webhook_host = getattr(config.host, "webhook_host", "0.0.0.0")
+        webhook_port = getattr(config.host, "webhook_port", 8080)
+        await webhook_server.start(host=webhook_host, port=webhook_port)
+
     # --- Start all components ---
     await registry.start_all()
     await ipc.start(groups=group_names)
+    await scheduler.init(db, container_mgr, config, registry, stream)
+    await scheduler.start()
+    await obs.start_event_loop_monitor()
 
     # --- Launch per-group consumer tasks ---
     consumer_tasks: list[asyncio.Task] = []
@@ -477,6 +577,7 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
                 stream=stream,
                 is_main=g.is_main,
                 db=db,
+                obs=obs,
                 token_budget=g.token_budget,
             ),
             name=f"consumer-{g.name}",
@@ -510,11 +611,17 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
         task.cancel()
     await asyncio.gather(*consumer_tasks, return_exceptions=True)
 
+    await scheduler.stop()
+    if proxy_sidecar.is_running:
+        await proxy_sidecar.stop()
+    if webhook_server is not None:
+        await webhook_server.stop()
     await debouncer.stop()
     await registry.stop_all()
     await ipc.stop()
     await db.backup()
     await db.close()
+    obs.stop()
 
     log.info("lynxclaw.stopped")
 

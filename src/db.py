@@ -339,6 +339,171 @@ class Database:
         )
         await self._conn.commit()
 
+    # ------------------------------------------------------------------
+    # tasks helpers
+    # ------------------------------------------------------------------
+
+    async def create_task(
+        self,
+        *,
+        id: str,
+        group_name: str,
+        type: str,
+        schedule: str,
+        prompt: str,
+    ) -> None:
+        """Insert a new scheduled task."""
+        ts = int(time.time())
+        await self._conn.execute(
+            """
+            INSERT INTO tasks (id, group_name, type, schedule, prompt, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'active', ?)
+            """,
+            (id, group_name, type, schedule, prompt, ts),
+        )
+        await self._conn.commit()
+
+    async def get_active_tasks(self) -> list[dict[str, Any]]:
+        """Return all tasks with status='active'."""
+        async with self._conn.execute(
+            "SELECT * FROM tasks WHERE status='active'"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def update_task_run(
+        self, *, task_id: str, last_run: int, next_run: int
+    ) -> None:
+        """Update last_run and next_run timestamps after execution."""
+        await self._conn.execute(
+            "UPDATE tasks SET last_run=?, next_run=? WHERE id=?",
+            (last_run, next_run, task_id),
+        )
+        await self._conn.commit()
+
+    async def cancel_task(self, *, task_id: str) -> None:
+        """Set task status to 'cancelled'."""
+        await self._conn.execute(
+            "UPDATE tasks SET status='cancelled' WHERE id=?",
+            (task_id,),
+        )
+        await self._conn.commit()
+
+    async def list_tasks(self, *, group_name: str) -> list[dict[str, Any]]:
+        """List all tasks for a group."""
+        async with self._conn.execute(
+            "SELECT * FROM tasks WHERE group_name=?",
+            (group_name,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # token_usage helpers
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # CLI read-only query helpers
+    # ------------------------------------------------------------------
+
+    async def get_all_groups(self) -> list[dict[str, Any]]:
+        """Return all groups ordered by name."""
+        async with self._conn.execute(
+            "SELECT * FROM groups ORDER BY name"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_group(self, name: str) -> Optional[dict[str, Any]]:
+        """Return a single group by name, or None if not found."""
+        async with self._conn.execute(
+            "SELECT * FROM groups WHERE name=?", (name,)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_messages(
+        self,
+        *,
+        group_name: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return messages with optional group/status filters, newest first."""
+        conditions: list[str] = []
+        params: list[Any] = []
+        if group_name is not None:
+            conditions.append("group_name=?")
+            params.append(group_name)
+        if status is not None:
+            conditions.append("status=?")
+            params.append(status)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
+        async with self._conn.execute(
+            f"SELECT * FROM messages {where} ORDER BY created_at DESC LIMIT ?",
+            params,
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_audit_log(
+        self,
+        *,
+        group_name: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return tool audit log entries, newest first."""
+        if group_name is not None:
+            sql = (
+                "SELECT * FROM tool_audit_log WHERE group_name=? "
+                "ORDER BY created_at DESC LIMIT ?"
+            )
+            params: tuple[Any, ...] = (group_name, limit)
+        else:
+            sql = "SELECT * FROM tool_audit_log ORDER BY created_at DESC LIMIT ?"
+            params = (limit,)
+        async with self._conn.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_all_sessions(self) -> list[dict[str, Any]]:
+        """Return all session rows ordered by last_active descending."""
+        async with self._conn.execute(
+            "SELECT * FROM sessions ORDER BY last_active DESC"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_all_tasks(
+        self, *, group_name: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Return all tasks (all statuses), optionally filtered by group."""
+        if group_name is not None:
+            sql = "SELECT * FROM tasks WHERE group_name=? ORDER BY created_at DESC"
+            params_t: tuple[Any, ...] = (group_name,)
+        else:
+            sql = "SELECT * FROM tasks ORDER BY created_at DESC"
+            params_t = ()
+        async with self._conn.execute(sql, params_t) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_token_usage_all_groups(self) -> list[dict[str, Any]]:
+        """Return summed token usage per group, ordered by total tokens desc."""
+        async with self._conn.execute(
+            """
+            SELECT group_name,
+                   COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens
+            FROM token_usage
+            GROUP BY group_name
+            ORDER BY (input_tokens + output_tokens) DESC
+            """
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
     async def get_token_usage(
         self,
         *,
