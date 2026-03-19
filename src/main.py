@@ -343,6 +343,11 @@ async def _group_consumer(
             "ANTHROPIC_API_KEY": config.anthropic_api_key,
             "LYNXCLAW_CHAT_ID": msg.chat_id,
         }
+        # Forward ANTHROPIC_BASE_URL if set, so the agent runner can start its
+        # proxy against the correct upstream (e.g. a third-party Anthropic-compatible API).
+        base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+        if base_url:
+            env_vars["ANTHROPIC_BASE_URL"] = base_url
 
         # Mark message as 'processing' before dispatching
         await db.update_message_status(

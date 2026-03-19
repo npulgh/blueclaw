@@ -1,0 +1,117 @@
+"""Lightweight proxy that intercepts Claude Code CLI model validation requests.
+
+The Claude Code CLI calls GET /v1/models/{model_id}?beta=true before sending
+any prompt. Third-party providers (e.g. Kimi) don't implement this endpoint,
+causing the CLI to abort with "model not found" before making any real API call.
+
+This proxy:
+- Intercepts GET /v1/models/* → returns a fake 200 response
+- Passes all other requests (POST /v1/messages, etc.) to the real upstream
+
+Usage (set as ANTHROPIC_BASE_URL):
+    python api_proxy.py --upstream https://api.example.com/v1 --port 9099
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import threading
+import urllib.request
+import urllib.error
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+def make_handler(upstream: str) -> type:
+    class ProxyHandler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass  # silence access logs
+
+        def do_GET(self):
+            # Intercept model validation: GET /v1/models/{id}?beta=true
+            if "/v1/models/" in self.path:
+                model_id = self.path.split("/v1/models/")[1].split("?")[0]
+                fake = {
+                    "id": model_id,
+                    "type": "model",
+                    "display_name": model_id,
+                    "created_at": "2025-01-01T00:00:00Z",
+                }
+                body = json.dumps(fake).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self._proxy("GET")
+
+        def do_POST(self):
+            self._proxy("POST")
+
+        def _proxy(self, method: str):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else None
+
+            # The CLI always sends absolute paths like /v1/messages, /v1/models/...
+            # Strip the leading /v1 prefix so the upstream base URL controls versioning.
+            # Examples:
+            #   upstream=https://api.example.com/v1  + /v1/messages → /messages  ✓
+            #   upstream=https://open.bigmodel.cn/api/paas/v4 + /v1/messages → /messages  ✓
+            #   upstream=https://api.anthropic.com (no /v1) → proxy never starts  ✓
+            path = self.path
+            if path.startswith("/v1"):
+                path = path[3:]  # strip /v1 prefix, keep /messages etc.
+
+            url = upstream.rstrip("/") + path
+            headers = {
+                k: v for k, v in self.headers.items()
+                if k.lower() not in ("host", "content-length", "transfer-encoding")
+            }
+
+            req = urllib.request.Request(url, data=body, headers=headers, method=method)
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    resp_body = resp.read()
+                    self.send_response(resp.status)
+                    for k, v in resp.headers.items():
+                        if k.lower() not in ("transfer-encoding", "connection"):
+                            self.send_header(k, v)
+                    self.end_headers()
+                    self.wfile.write(resp_body)
+            except urllib.error.HTTPError as e:
+                resp_body = e.read()
+                self.send_response(e.code)
+                for k, v in e.headers.items():
+                    if k.lower() not in ("transfer-encoding", "connection"):
+                        self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(resp_body)
+
+    return ProxyHandler
+
+
+def start_proxy(upstream: str, port: int) -> None:
+    handler = make_handler(upstream)
+    server = HTTPServer(("127.0.0.1", port), handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    # Wait until the proxy is actually accepting connections
+    import socket, time
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                break
+        except OSError:
+            time.sleep(0.05)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--upstream", required=True)
+    parser.add_argument("--port", type=int, default=9099)
+    args = parser.parse_args()
+    print(f"Proxy listening on http://127.0.0.1:{args.port} → {args.upstream}")
+    handler = make_handler(args.upstream)
+    HTTPServer(("127.0.0.1", args.port), handler).serve_forever()

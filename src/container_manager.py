@@ -146,7 +146,10 @@ class ContainerManager:
             env_vars={**env_vars, "LYNXCLAW_PROMPT": prompt},
             mounts=mounts,
             is_main=is_main,
-            session_id=sid,
+            # Pass the original session_id (None = new session) so _build_command
+            # only sets LYNXCLAW_SESSION_ID when there is a real Claude Code session
+            # to resume.  sid is only used for logging/tracking, not for --resume.
+            session_id=session_id or "",
             extra_cmd=extra_cmd,
         )
 
@@ -270,8 +273,14 @@ class ContainerManager:
             "--security-opt", "no-new-privileges:true",
             # Read-only root filesystem
             "--read-only",
-            # Writable /tmp via tmpfs (noexec to prevent code injection)
-            "--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
+            # Writable /tmp via tmpfs (nosuid to prevent privilege escalation;
+            # noexec omitted — Node.js JIT requires executable mappings in /tmp)
+            "--tmpfs", "/tmp:rw,nosuid,size=256m",
+            # Writable home dir for Claude Code CLI — it writes ~/.claude.json and
+            # ~/.claude/backups/ on startup; without this the CLI silently exits
+            # under --read-only before sending any output.
+            # uid=1000 matches the 'agent' user inside the container.
+            "--tmpfs", "/home/agent:rw,nosuid,size=64m,uid=1000,gid=1000",
             # Process count limit
             "--pids-limit", "256",
             # Non-root user
