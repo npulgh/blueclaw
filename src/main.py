@@ -24,11 +24,13 @@ from src.db import Database
 from src.ipc import IPCWatcher
 from src.memory import ensure_group_dirs, get_global_memory_path
 from src.observability import Observability, new_correlation_id
+from src.persistent_container import PersistentContainer
 from src.proxy import ProxySidecar
 from src.router import MessageRouter, RouteResult
 from src.scheduler import TaskScheduler
 from src.server import WebhookServer
 from src.stream_debouncer import StreamDebouncer
+from src.swarm import SwarmCoordinator
 from src.types import IncomingMessage, OutgoingMessage
 
 log = structlog.get_logger(__name__)
@@ -79,6 +81,7 @@ async def _ipc_dispatch(
     stream: _StreamState,
     debouncer: StreamDebouncer,
     db: Database,
+    swarm: "SwarmCoordinator",
 ) -> None:
     """Handle IPC messages from containers and deliver to IM."""
     group = params.get("group", "")
@@ -134,6 +137,42 @@ async def _ipc_dispatch(
             log.info("ipc.cancel_task.done", group=group, task_id=task_id)
         except Exception as exc:
             log.error("ipc.cancel_task.error", group=group, error=str(exc))
+        return
+
+    elif method == "delegate_task":
+        from_group = params.get("from_group", group)
+        to_group = params.get("to_group", "")
+        prompt = params.get("prompt", "")
+        context = params.get("context", "")
+        if not to_group or not prompt:
+            log.warning("ipc.delegate_task.missing_params", group=group, params=params)
+            return
+        try:
+            await swarm.delegate(from_group, to_group, prompt, context)
+            log.info("ipc.delegate_task.done", from_group=from_group, to_group=to_group)
+        except Exception as exc:
+            log.error("ipc.delegate_task.error", group=group, error=str(exc))
+        return
+
+    elif method == "read_context":
+        target_group = params.get("target_group", "")
+        if not target_group:
+            log.warning("ipc.read_context.missing_target", group=group)
+            return
+        try:
+            content = await swarm.read_context(group, target_group)
+            import json as _json
+            cwd = __import__("os").getcwd()
+            inbox_dir = __import__("pathlib").Path(cwd) / "data" / "ipc" / group / "inbox"
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            result_file = inbox_dir / f"{rpc_id or 'read_context'}.json"
+            result_file.write_text(
+                _json.dumps({"jsonrpc": "2.0", "id": rpc_id, "result": content}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            log.info("ipc.read_context.written", group=group, target=target_group, file=str(result_file))
+        except Exception as exc:
+            log.error("ipc.read_context.error", group=group, error=str(exc))
         return
 
     # --- IM delivery methods (require active session) ---
@@ -244,9 +283,11 @@ async def _group_consumer(
     db: Database,
     obs: "Observability",
     token_budget: int = 0,
+    container_mode: str = "ephemeral",
+    persistent_container: Optional["PersistentContainer"] = None,
 ) -> None:
     """Consume messages from a group queue, spawn containers, handle errors."""
-    log.info("consumer.started", group=group_name)
+    log.info("consumer.started", group=group_name, mode=container_mode)
 
     while True:
         msg: IncomingMessage = await router.get_next(group_name)
@@ -303,7 +344,7 @@ async def _group_consumer(
             "LYNXCLAW_CHAT_ID": msg.chat_id,
         }
 
-        # Mark message as 'processing' before spawning container
+        # Mark message as 'processing' before dispatching
         await db.update_message_status(
             channel=msg.channel,
             chat_id=msg.chat_id,
@@ -311,7 +352,30 @@ async def _group_consumer(
             status="processing",
         )
 
-        # Spawn container
+        # --- Persistent mode: write prompt to inbox, IPC watcher delivers response ---
+        if container_mode == "persistent" and persistent_container is not None:
+            try:
+                await persistent_container.send_prompt(msg.text, chat_id=msg.chat_id)
+                await db.update_message_status(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    message_id=msg.message_id,
+                    status="completed",
+                )
+                log.info("consumer.persistent.prompt_sent", group=group_name)
+            except Exception:
+                log.exception("consumer.persistent.send_error", group=group_name)
+                await db.update_message_status(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    message_id=msg.message_id,
+                    status="failed",
+                )
+                await _send_error(registry, msg.channel, msg.chat_id, _ERR_CONTAINER)
+                stream.clear(group_name)
+            continue
+
+        # --- Ephemeral mode: spawn a new container per message ---
         _t_spawn = time.monotonic()
         obs.active_containers.inc()
         try:
@@ -486,6 +550,9 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     container_mgr = ContainerManager()
     container_mgr.init(config.container, config.security)
 
+    swarm = SwarmCoordinator()
+    await swarm.init(db, container_mgr, config)
+
     # --- Proxy sidecar (optional, only started when config.proxy.enabled) ---
     proxy_sidecar = ProxySidecar()
     proxy_sidecar.init(config.proxy, runtime=config.container.runtime)
@@ -513,6 +580,7 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
             stream=stream,
             debouncer=debouncer,
             db=db,
+            swarm=swarm,
         )
 
     ipc = IPCWatcher()
@@ -566,7 +634,17 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
 
     # --- Launch per-group consumer tasks ---
     consumer_tasks: list[asyncio.Task] = []
+    persistent_containers: list[PersistentContainer] = []
     for g in config.groups:
+        pc: Optional[PersistentContainer] = None
+        if g.container_mode == "persistent":
+            pc = PersistentContainer()
+            await pc.start(
+                g.name, config, config.security,
+                is_main=g.is_main,
+            )
+            persistent_containers.append(pc)
+
         task = asyncio.create_task(
             _group_consumer(
                 g.name,
@@ -579,6 +657,8 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
                 db=db,
                 obs=obs,
                 token_budget=g.token_budget,
+                container_mode=g.container_mode,
+                persistent_container=pc,
             ),
             name=f"consumer-{g.name}",
         )
@@ -610,6 +690,9 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     for task in consumer_tasks:
         task.cancel()
     await asyncio.gather(*consumer_tasks, return_exceptions=True)
+
+    for pc in persistent_containers:
+        await pc.stop()
 
     await scheduler.stop()
     if proxy_sidecar.is_running:

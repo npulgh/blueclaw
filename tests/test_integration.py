@@ -182,6 +182,7 @@ class TestIPCDispatch:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
 
         adapter.send_message.assert_awaited_once_with(
@@ -207,6 +208,7 @@ class TestIPCDispatch:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
 
         # Debouncer with chars=1 flushes immediately → send_message called
@@ -235,6 +237,7 @@ class TestIPCDispatch:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
 
         # Debouncer flushes " world"; flush_cb appends to existing buffer "Hello"
@@ -263,6 +266,7 @@ class TestIPCDispatch:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
 
         assert "g1" not in stream.stream_msg_id
@@ -286,6 +290,7 @@ class TestIPCDispatch:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
         # No adapter calls
         reg.get.return_value.send_message.assert_not_awaited()
@@ -319,6 +324,7 @@ class TestStreamingDebounce:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
 
         # No IM call yet — chunk is buffered
@@ -350,6 +356,7 @@ class TestStreamingDebounce:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
 
         # Placeholder exists → edit_message used
@@ -380,6 +387,7 @@ class TestStreamingDebounce:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
 
         adapter.edit_message.assert_awaited_once_with(
@@ -412,6 +420,7 @@ class TestStreamingDebounce:
             stream=stream,
             debouncer=debouncer,
             db=_mock_db(),
+            swarm=MagicMock(),
         )
 
         adapter.send_message.assert_awaited_once()

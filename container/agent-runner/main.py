@@ -275,5 +275,158 @@ async def main() -> None:
         sys.exit(1)
 
 
+async def _write_heartbeat(heartbeat_path: Path) -> None:
+    """Write a heartbeat.json file with the current timestamp."""
+    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps({"timestamp": time.time()}, ensure_ascii=False)
+    tmp = heartbeat_path.with_suffix(".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    tmp.rename(heartbeat_path)
+
+
+async def persistent_loop(group: str, ipc_base: str) -> None:
+    """Run a persistent message loop: poll inbox, process prompts, heartbeat.
+
+    Reads prompt files from {ipc_base}/{group}/inbox/, processes each with
+    run_agent(), writes responses to outbox via ipc_bridge, and writes a
+    heartbeat.json every 30 seconds so the host can detect liveness.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        log.error("missing ANTHROPIC_API_KEY")
+        sys.exit(1)
+
+    inbox_dir = Path(ipc_base) / group / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    heartbeat_path = Path(ipc_base) / group / "heartbeat.json"
+    audit_dir = Path(ipc_base) / group / "audit"
+
+    runner_dir = Path(__file__).parent
+    sys.path.insert(0, str(runner_dir))
+    from ipc_bridge import send_message, stream_chunk  # type: ignore
+
+    from claude_agent_sdk import HookMatcher  # type: ignore
+
+    session_id: str = os.environ.get("LYNXCLAW_SESSION_ID", "")
+    streaming_enabled = os.environ.get("LYNXCLAW_STREAMING", "1") == "1"
+
+    last_heartbeat = 0.0
+
+    log.info("persistent_loop.started", group=group, ipc_base=ipc_base)
+
+    while True:
+        # Write heartbeat every 30 seconds
+        now = time.time()
+        if now - last_heartbeat >= 30:
+            await _write_heartbeat(heartbeat_path)
+            last_heartbeat = time.time()
+            log.debug("persistent_loop.heartbeat", group=group)
+
+        # Scan inbox for prompt files
+        prompt_files = sorted(inbox_dir.glob("*.json"))
+        if not prompt_files:
+            await asyncio.sleep(0.5)
+            continue
+
+        for prompt_file in prompt_files:
+            try:
+                raw = prompt_file.read_text(encoding="utf-8")
+                payload = json.loads(raw)
+            except Exception as exc:
+                log.warning("persistent_loop.bad_inbox_file", file=str(prompt_file), error=str(exc))
+                try:
+                    prompt_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                continue
+
+            # Consume the file immediately to avoid double-processing
+            try:
+                prompt_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            params = payload.get("params", {})
+            prompt = params.get("prompt", "")
+            chat_id = params.get("chat_id", "")
+
+            if not prompt:
+                log.warning("persistent_loop.empty_prompt", file=str(prompt_file))
+                continue
+
+            log.info("persistent_loop.processing", group=group, chat_id=chat_id)
+
+            async def pre_tool_use(input: dict, tool_use_id: str, context: Any) -> dict:
+                tool_name = input.get("tool_name", "")
+                tool_input = input.get("tool_input", {})
+                command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+                blocked = tool_name == "Bash" and is_dangerous(command)
+                write_audit(audit_dir, tool_name, tool_input, tool_use_id, blocked, group, session_id)
+                if blocked:
+                    log.warning("blocked dangerous command", command=command)
+                    return {"decision": "block", "reason": "blocked by policy"}
+                return {}
+
+            async def post_tool_use(input: dict, tool_use_id: str, context: Any) -> dict:
+                tool_name = input.get("tool_name", "")
+                tool_input = input.get("tool_input", {})
+                write_audit(audit_dir, tool_name, tool_input, tool_use_id, False, group, session_id)
+                return {}
+
+            hooks = {
+                "PreToolUse": [HookMatcher(matcher="Bash", hooks=[pre_tool_use])],
+                "PostToolUse": [HookMatcher(matcher=".*", hooks=[post_tool_use])],
+            }
+
+            try:
+                if streaming_enabled:
+                    async def on_chunk(text: str, is_final: bool) -> None:
+                        stream_chunk(
+                            group=group,
+                            chat_id=chat_id,
+                            text=text,
+                            is_final=is_final,
+                            ipc_base=ipc_base,
+                        )
+                    response, new_session_id, in_tok, out_tok = await run_agent(
+                        prompt, session_id, hooks, api_key, on_chunk=on_chunk
+                    )
+                else:
+                    response, new_session_id, in_tok, out_tok = await run_agent(
+                        prompt, session_id, hooks, api_key
+                    )
+                    send_message(group=group, chat_id=chat_id, text=response, ipc_base=ipc_base)
+
+                if new_session_id:
+                    session_id = new_session_id
+
+                # Write token usage for host to record
+                token_usage_file = Path(ipc_base) / group / "token_usage.json"
+                token_usage_file.parent.mkdir(parents=True, exist_ok=True)
+                token_usage_file.write_text(
+                    json.dumps({"input_tokens": in_tok, "output_tokens": out_tok}),
+                    encoding="utf-8",
+                )
+                log.info("persistent_loop.done", group=group, in_tok=in_tok, out_tok=out_tok)
+
+            except Exception as exc:
+                log.error("persistent_loop.agent_error", group=group, error=str(exc))
+                try:
+                    send_message(
+                        group=group,
+                        chat_id=chat_id,
+                        text=f"[Agent error: {exc}]",
+                        ipc_base=ipc_base,
+                    )
+                except Exception:
+                    pass
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    mode = os.environ.get("LYNXCLAW_MODE", "")
+    if mode == "persistent":
+        _group = os.environ.get("LYNXCLAW_GROUP", "main")
+        _ipc_base = os.environ.get("IPC_BASE_DIR", "/workspace/ipc")
+        asyncio.run(persistent_loop(_group, _ipc_base))
+    else:
+        asyncio.run(main())
