@@ -332,7 +332,7 @@ async def _group_consumer(
         mounts = {
             "group_dir": os.path.join(cwd, "groups", group_name),
             "global_dir": os.path.join(cwd, "groups"),
-            "ipc_dir": os.path.join(cwd, "data", "ipc", group_name),
+            "ipc_dir": os.path.join(cwd, "data", "ipc"),
         }
         if is_main:
             mounts["project_dir"] = cwd
