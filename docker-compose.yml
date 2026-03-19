@@ -1,0 +1,40 @@
+# Lynxclaw — one-command deployment
+# Usage:
+#   cp .env.example .env   # fill in real values
+#   docker compose up -d --build
+
+services:
+  # ── Host process ──────────────────────────────────────────────────────────
+  # Orchestrates agent containers, IPC, and IM channels.
+  lynxclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lynxclaw-host
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Docker socket — host process spawns agent containers via docker CLI
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Persistent data (DB + IPC + audit)
+      - lynxclaw-data:/app/data
+      # Group memory (CLAUDE.md files survive restarts)
+      - ./groups:/app/groups
+      # Config override (optional — image has defaults baked in)
+      - ./lynxclaw.config.yaml:/app/lynxclaw.config.yaml:ro
+    depends_on:
+      agent-image:
+        condition: service_completed_successfully
+
+  # ── Agent image builder ───────────────────────────────────────────────────
+  # One-shot service that builds the agent image, then exits.
+  # The host process references this image when spawning containers.
+  agent-image:
+    image: lynxclaw-agent:latest
+    build:
+      context: .
+      dockerfile: container/agent-runner/Dockerfile
+    entrypoint: ["echo", "image built"]
+
+volumes:
+  lynxclaw-data:
