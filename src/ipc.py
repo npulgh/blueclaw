@@ -34,6 +34,8 @@ VALID_METHODS = frozenset({
     "schedule_task",
     "list_tasks",
     "cancel_task",
+    "delegate_task",
+    "read_context",
 })
 
 

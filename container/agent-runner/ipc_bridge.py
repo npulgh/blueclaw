@@ -225,3 +225,77 @@ def cancel_task(
     outbox = _get_outbox(group, ipc_base)
     _write_atomic(outbox, payload)
     return rpc_id
+
+
+def delegate_task(
+    group: str,
+    from_group: str,
+    to_group: str,
+    prompt: str,
+    context: str = "",
+    ipc_base: Optional[str] = None,
+) -> str:
+    """Request the host to delegate a task to another group's agent.
+
+    The host SwarmCoordinator will spawn a container in *to_group* with the
+    given prompt.  Results are delivered via that group's normal IPC outbox.
+
+    Args:
+        group: The requesting group name (must match the container's own group).
+        from_group: Logical source group (usually same as *group*).
+        to_group: Target group to delegate to.
+        prompt: Prompt to pass to the delegated agent.
+        context: Optional extra context prepended to the prompt.
+        ipc_base: Override for the IPC base directory.
+
+    Returns:
+        UUID string identifying this IPC request.
+    """
+    rpc_id = str(uuid.uuid4())
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "delegate_task",
+        "params": {
+            "group": group,
+            "from_group": from_group,
+            "to_group": to_group,
+            "prompt": prompt,
+            "context": context,
+        },
+        "id": rpc_id,
+    }
+    outbox = _get_outbox(group, ipc_base)
+    _write_atomic(outbox, payload)
+    return rpc_id
+
+
+def read_context(
+    group: str,
+    target_group: str,
+    ipc_base: Optional[str] = None,
+) -> str:
+    """Request the host to read another group's CLAUDE.md context.
+
+    The host writes the result as a JSON-RPC response to the group inbox.
+
+    Args:
+        group: The requesting group name.
+        target_group: The group whose CLAUDE.md to read.
+        ipc_base: Override for the IPC base directory.
+
+    Returns:
+        UUID RPC ID that will be used as the inbox result filename.
+    """
+    rpc_id = str(uuid.uuid4())
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "read_context",
+        "params": {
+            "group": group,
+            "target_group": target_group,
+        },
+        "id": rpc_id,
+    }
+    outbox = _get_outbox(group, ipc_base)
+    _write_atomic(outbox, payload)
+    return rpc_id
