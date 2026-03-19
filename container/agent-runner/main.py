@@ -254,6 +254,17 @@ async def main() -> None:
                 prompt, session_id, hooks, api_key, on_chunk=on_chunk
             )
             log.info("agent done (streaming)", chars=len(response))
+            # If the API returned an empty response (no chunks emitted), write a
+            # fallback send_message so the host IPC watcher always receives at
+            # least one outbox file and doesn't wait forever.
+            if not response:
+                send_message(
+                    group=group,
+                    chat_id=chat_id,
+                    text="[Agent returned empty response]",
+                    ipc_base=ipc_base,
+                )
+                log.warning("agent empty response, wrote fallback IPC")
         else:
             # Non-streaming path: collect full response, then send_message
             response, new_session_id, input_tokens, output_tokens = await run_agent(
@@ -403,6 +414,15 @@ async def persistent_loop(group: str, ipc_base: str) -> None:
                     response, new_session_id, in_tok, out_tok = await run_agent(
                         prompt, session_id, hooks, api_key, on_chunk=on_chunk
                     )
+                    # Fallback for empty streaming response (same as ephemeral path)
+                    if not response:
+                        send_message(
+                            group=group,
+                            chat_id=chat_id,
+                            text="[Agent returned empty response]",
+                            ipc_base=ipc_base,
+                        )
+                        log.warning("agent empty response, wrote fallback IPC")
                 else:
                     response, new_session_id, in_tok, out_tok = await run_agent(
                         prompt, session_id, hooks, api_key
