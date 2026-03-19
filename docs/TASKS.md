@@ -27,10 +27,12 @@
 
 ---
 
-## Phase 1 — MVP（Telegram 端到端）
+## Phase 1 — MVP（Telegram 端到端） ✅ COMPLETED
 
 > 目标：一条 Telegram 消息进来，Agent 在容器里处理，回复发回 Telegram。
 > **depends**: T0.1, T0.2（Spike 验证通过后方可开始）
+>
+> **完成日期**: 2026-03-18 | **测试**: 135/135 通过 | **提交**: 8781337..6904001
 
 ### T1.1 项目脚手架
 
@@ -192,10 +194,12 @@
 
 ---
 
-## Phase 2 — Resumable + 飞书 + 流式 + 韧性
+## Phase 2 — Resumable + 飞书 + 流式 + 韧性 ✅ COMPLETED
 
 > 目标：会话可恢复、飞书接入、流式响应、崩溃恢复、分层内存。
 > 优先级调整来源：[多引擎综合审视](../notes/multi-engine-review.md)
+>
+> **完成日期**: 2026-03-19 | **测试**: 230 passed, 2 skipped
 
 ### T2.1 Resumable 会话
 
@@ -292,9 +296,11 @@
 
 ---
 
-## Phase 3 — 网络代理 + 运维
+## Phase 3 — 网络代理 + 运维 ✅ COMPLETED
 
 > 目标：受控联网、可观测性、定时任务、生产就绪。
+>
+> **完成日期**: 2026-03-19 | **测试**: 291 passed, 2 skipped
 
 ### T3.1 Network Proxy Sidecar
 
@@ -331,9 +337,11 @@
 
 ---
 
-## Phase 4 — 扩展
+## Phase 4 — 扩展 ✅ COMPLETED
 
 > 目标：Channel 插件化、多 Agent 协作、管理界面、可选高级模式。
+>
+> **完成日期**: 2026-03-19 | **测试**: 381 passed, 2 skipped
 
 ### T4.1 Channel 扩展接口
 
