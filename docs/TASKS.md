@@ -385,3 +385,33 @@
 | 默认 Ephemeral 容器 + 可选 Resumable（不做 Persistent） | [ADR-005](adr/005-resumable-containers.md) |
 | 容器加固参数（cap-drop ALL 等）不可删减 | ARCHITECTURE.md §3.4.2 |
 | 数据库使用 SQLite（不换 PostgreSQL 等） | 设计哲学——零部署依赖 |
+
+---
+
+## 遗留问题（Backlog）
+
+> 以下问题在 E2E 测试阶段发现，已记录但尚未修复。详见 [ADR-005-container-hardening-lessons.md](adr/ADR-005-container-hardening-lessons.md)。
+
+### BUG-001: 空响应不写 IPC outbox
+
+**文件**: `container/agent-runner/main.py`
+
+**现象**: API 返回空响应（`chars=0`）时，streaming 路径不写任何 outbox 文件，host 端 adapter 永远收不到回复，`test_adapter_receives_reply` 超时。
+
+**根因**: `on_chunk` 回调从未被调用，`send_message` 也未被调用。容器 exit 0，但 IPC 无输出。
+
+**修复方向**: 在 streaming 路径末尾，若 `len(response) == 0`，强制写一个 `send_message` IPC 文件（空字符串或 `[Agent returned empty response]`）。
+
+**验收**: `test_adapter_receives_reply` 在 API 返回空响应时，adapter 收到一条消息（即使内容为空）。
+
+---
+
+### BUG-002: `test_adapter_receives_reply` 依赖 API 返回非空 streaming 响应
+
+**文件**: `tests/test_e2e_local.py`
+
+**现象**: 测试等待 `len(adapter.sent) > initial_sent + 1`（需要 thinking placeholder + 真实回复），但 API proxy 返回空响应时只有 placeholder，测试超时。
+
+**根因**: 测试假设 API 总是返回非空内容。当使用第三方 proxy（如 `api.claudecode.net.cn`）时，可能返回空响应。
+
+**修复方向**: 测试应接受 `len(adapter.sent) > initial_sent`（至少一条新消息），或在 BUG-001 修复后自然通过。

@@ -2,13 +2,24 @@ FROM python:3.11-slim
 
 RUN useradd -m -u 1000 agent
 
-WORKDIR /workspace/group
+# Runner code lives at /app/runner — outside all volume mount points
+# so that group_dir/ipc_dir mounts under /workspace never shadow it.
+WORKDIR /app
 
 COPY container/agent-runner/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY container/agent-runner/ ./runner/
 
+# Pre-create all volume mount points so they exist under --read-only.
+# Docker requires mount point directories to exist in the image when
+# the root filesystem is read-only.
+RUN mkdir -p /workspace/group /workspace/ipc /workspace/global \
+             /workspace/project /workspace/global_memory
+
+# Working directory for the agent process is the group dir (mounted at runtime)
+WORKDIR /workspace/group
+
 USER agent
 
-ENTRYPOINT ["python", "runner/main.py"]
+ENTRYPOINT ["python", "/app/runner/main.py"]

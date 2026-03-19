@@ -113,7 +113,6 @@ async def run_agent(
     from claude_agent_sdk import ClaudeAgentOptions, query  # type: ignore
 
     options = ClaudeAgentOptions(
-        api_key=api_key,
         max_turns=30,
         hooks=hooks,
     )
@@ -189,6 +188,19 @@ async def main() -> None:
     if not prompt:
         log.error("missing LYNXCLAW_PROMPT")
         sys.exit(1)
+
+    # --- Start local proxy if upstream doesn't support /v1/models/{id} ---
+    # Claude Code CLI validates the model via GET /v1/models/{id}?beta=true before
+    # sending any prompt. Third-party providers (e.g. Kimi) return 404 for this
+    # endpoint, causing the CLI to abort. The proxy intercepts that call and returns
+    # a fake 200, then forwards all other requests to the real upstream.
+    upstream_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+    if upstream_url and "anthropic.com" not in upstream_url and "127.0.0.1" not in upstream_url:
+        from api_proxy import start_proxy
+        proxy_port = 9099
+        start_proxy(upstream=upstream_url, port=proxy_port)
+        os.environ["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{proxy_port}"
+        log.info("api_proxy.started", upstream=upstream_url, port=proxy_port)
 
     # --- Hook: PreToolUse — block dangerous Bash commands ---
     async def pre_tool_use(input: dict, tool_use_id: str, context: Any) -> dict:
