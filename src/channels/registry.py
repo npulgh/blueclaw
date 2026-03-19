@@ -2,15 +2,19 @@
 
 ChannelAdapter defines the interface every channel (Telegram, Feishu, …) must implement.
 ChannelRegistry manages adapter instances: register, lookup, start_all, stop_all.
+discover_adapters() is the factory used by main.py to instantiate enabled adapters.
 """
 
 from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from src.types import ChannelCapabilities, IncomingMessage, OutgoingMessage
+
+if TYPE_CHECKING:
+    from src.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -97,3 +101,45 @@ class ChannelRegistry:
     def names(self) -> list[str]:
         """Return registered adapter names in insertion order."""
         return list(self._adapters.keys())
+
+
+# ---------------------------------------------------------------------------
+# Adapter factory / auto-discovery
+# ---------------------------------------------------------------------------
+
+def discover_adapters(config: "Config") -> dict[str, "ChannelAdapter"]:
+    """Instantiate and return all adapters that are enabled in *config*.
+
+    Returns a dict of ``{channel_name: uninitialised_adapter}``.  The caller
+    is responsible for calling ``adapter.init(channel_config)`` on each entry
+    before registering it with a ``ChannelRegistry``.
+
+    Adding a new adapter requires only:
+    1. Creating the adapter class in ``src/channels/<name>.py``.
+    2. Adding a config section to ``src/config.py``.
+    3. Adding one ``if config.<name>.enabled`` block below.
+
+    No other files need to change.
+    """
+    # Import here to avoid circular imports at module load time.
+    from src.channels.feishu import FeishuAdapter
+    from src.channels.telegram import TelegramAdapter
+
+    adapters: dict[str, ChannelAdapter] = {}
+
+    if config.telegram.enabled:
+        adapters["telegram"] = TelegramAdapter()
+        logger.debug("discover_adapters: telegram enabled")
+
+    if config.feishu.enabled:
+        adapters["feishu"] = FeishuAdapter()
+        logger.debug("discover_adapters: feishu enabled")
+
+    # To add a new channel (e.g. Discord), append:
+    #
+    #   if config.discord.enabled:
+    #       from src.channels.discord import DiscordAdapter
+    #       adapters["discord"] = DiscordAdapter()
+
+    logger.info("discover_adapters: found %d adapter(s): %s", len(adapters), list(adapters))
+    return adapters

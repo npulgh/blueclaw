@@ -715,7 +715,7 @@ class TestMainLifecycle:
             patch("src.main.load_config", return_value=config),
             patch("src.main.Database") as MockDB,
             patch("src.main.ChannelRegistry") as MockReg,
-            patch("src.main.TelegramAdapter") as MockTG,
+            patch("src.main.discover_adapters", return_value={"telegram": _mock_adapter()}),
             patch("src.main.MessageRouter") as MockRouter,
             patch("src.main.ContainerManager") as MockCM,
             patch("src.main.IPCWatcher") as MockIPC,
@@ -724,6 +724,7 @@ class TestMainLifecycle:
             patch("src.main.TaskScheduler") as MockScheduler,
             patch("src.main.ProxySidecar") as MockProxy,
             patch("src.main.ensure_group_dirs"),
+            patch("src.main.WebhookServer") as MockWebhook,
         ):
             db_inst = MockDB.return_value
             db_inst.init = AsyncMock()
@@ -736,9 +737,6 @@ class TestMainLifecycle:
             reg_inst.names = ["telegram"]
             reg_inst.get = MagicMock()
             reg_inst.register = MagicMock()
-
-            tg_inst = MockTG.return_value
-            tg_inst.init = AsyncMock()
 
             router_inst = MockRouter.return_value
             router_inst.init = AsyncMock()
@@ -797,8 +795,6 @@ class TestMainLifecycle:
 
             # Verify init sequence
             db_inst.init.assert_awaited_once()
-            tg_inst.init.assert_awaited_once()
-            reg_inst.register.assert_called_once_with("telegram", tg_inst)
             router_inst.init.assert_awaited_once()
             cm_inst.init.assert_called_once()
             ipc_inst.init.assert_awaited_once()
