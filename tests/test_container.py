@@ -133,10 +133,16 @@ class TestBuildCommand:
     def test_tmpfs(self):
         m = _make_manager()
         cmd = m._build_command(group_name="g", env_vars={}, mounts={}, session_id="s")
-        assert "--tmpfs" in cmd
-        idx = cmd.index("--tmpfs")
-        assert "noexec" in cmd[idx + 1]
-        assert "nosuid" in cmd[idx + 1]
+        # There should be at least two --tmpfs entries: /tmp and /home/agent
+        tmpfs_indices = [i for i, v in enumerate(cmd) if v == "--tmpfs"]
+        assert len(tmpfs_indices) >= 2, f"Expected >=2 --tmpfs flags, got {len(tmpfs_indices)}"
+        tmpfs_values = [cmd[i + 1] for i in tmpfs_indices]
+        # /tmp: nosuid required; noexec intentionally omitted (Node.js JIT needs exec)
+        tmp_entry = next(v for v in tmpfs_values if v.startswith("/tmp:"))
+        assert "nosuid" in tmp_entry
+        # /home/agent: writable for Claude Code CLI config files
+        home_entry = next(v for v in tmpfs_values if v.startswith("/home/agent:"))
+        assert "uid=1000" in home_entry
 
     def test_pids_limit(self):
         m = _make_manager()
