@@ -3,14 +3,14 @@
 
 # ── Host process ────────────────────────────────────────────────────────────
 host:
-  log_level: info          # debug | info | warning | error
+  log_level: debug         # debug | info | warning | error
 
 # ── Agent containers ────────────────────────────────────────────────────────
 container:
   image: lynxclaw-agent:latest
   memory: 512m
   cpus: 1.0
-  network: none            # none | proxy
+  network: bridge          # none | proxy (use bridge for testing with direct API access)
   timeout: 300             # seconds before container is killed
   max_concurrent: 5        # max simultaneous agent containers
   lifecycle: ephemeral     # ephemeral | resumable
@@ -19,7 +19,7 @@ container:
 # ── Telegram channel ────────────────────────────────────────────────────────
 # Token is read from TELEGRAM_BOT_TOKEN env var.
 telegram:
-  enabled: false
+  enabled: true
   mode: polling            # polling | webhook
 
 # ── Feishu / Lark channel ───────────────────────────────────────────────────
@@ -68,7 +68,7 @@ security:
 groups:
   - name: main
     channel: telegram
-    chat_id: "-1001234567890"
+    chat_id: "7994661284"
     is_main: true
-    trigger: "@bot"
+    trigger: ""
     token_budget: 0      # 0 = unlimited; set to e.g. 500000 to cap monthly tokens

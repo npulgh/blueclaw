@@ -7,6 +7,7 @@ for edit_message to stay within Telegram's 30 edits/sec global limit.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Optional
 
@@ -95,9 +96,19 @@ class TelegramAdapter(ChannelAdapter):
 
         self._mode = config.mode
 
+        # Use HTTPS_PROXY / HTTP_PROXY env vars if available (e.g. for GFW bypass)
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or None
+        if proxy:
+            from aiogram.client.session.aiohttp import AiohttpSession
+            session = AiohttpSession(proxy=proxy)
+            logger.info("telegram_proxy_configured", proxy=proxy)
+        else:
+            session = None
+
         self._bot = Bot(
             token=config.bot_token,
             default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            session=session,
         )
         self._dp = Dispatcher()
 
@@ -115,8 +126,17 @@ class TelegramAdapter(ChannelAdapter):
             logger.info("telegram_webhook_mode_ready")
             return
 
+        async def _safe_polling() -> None:
+            try:
+                await self._dp.start_polling(self._bot, handle_signals=False)
+            except Exception:
+                logger.exception("telegram_polling_crashed")
+            except BaseException as e:
+                logger.error("telegram_polling_base_exception", exc_type=type(e).__name__, exc=str(e))
+                raise
+
         self._polling_task = asyncio.create_task(
-            self._dp.start_polling(self._bot, handle_signals=False),
+            _safe_polling(),
             name="telegram-polling",
         )
         logger.info("telegram_polling_started")
@@ -195,6 +215,8 @@ class TelegramAdapter(ChannelAdapter):
 
     async def _on_aiogram_message(self, message: Message) -> None:
         """Convert aiogram Message → IncomingMessage and dispatch to handler."""
+        logger.info("telegram_message_received", chat_id=str(message.chat.id),
+                     message_id=str(message.message_id))
         if self._handler is None:
             return
 

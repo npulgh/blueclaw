@@ -349,6 +349,22 @@ async def _group_consumer(
         if base_url:
             env_vars["ANTHROPIC_BASE_URL"] = base_url
 
+        # Forward ANTHROPIC_AUTH_TOKEN (must be "" for some mirrors like aicodemirror)
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        if auth_token is not None:
+            env_vars["ANTHROPIC_AUTH_TOKEN"] = auth_token
+
+        # Disable non-essential traffic (tool_search, MCP config fetches to api.anthropic.com)
+        # which can hang or error when using third-party API mirrors behind GFW.
+        if base_url and "anthropic.com" not in base_url:
+            env_vars["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+
+        # Note: Do NOT forward HTTPS_PROXY into the container.
+        # The container's api_proxy.py connects directly to the upstream API
+        # (e.g. api.kimi.com). Routing through a GFW-bypass proxy (Clash etc.)
+        # can cause ConnectionRefused for domestic Chinese API endpoints.
+        # Only the host process needs HTTPS_PROXY (for Telegram API access).
+
         # Mark message as 'processing' before dispatching
         await db.update_message_status(
             channel=msg.channel,
@@ -433,7 +449,7 @@ async def _group_consumer(
                 "consumer.nonzero_exit",
                 group=group_name,
                 exit_code=result.exit_code,
-                stderr=result.stderr[:500],
+                stderr=result.stderr[:2000],
             )
             await db.update_message_status(
                 channel=msg.channel,
@@ -677,6 +693,17 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
         stop_event.set()
 
     loop = asyncio.get_running_loop()
+
+    # Catch unobserved task exceptions (helps diagnose polling crashes)
+    def _exception_handler(_loop, context):
+        exc = context.get("exception")
+        task = context.get("task")
+        log.error("asyncio_unhandled_exception",
+                  task=str(task) if task else "unknown",
+                  message=context.get("message", ""),
+                  exc_type=type(exc).__name__ if exc else "unknown",
+                  exc=str(exc) if exc else "")
+    loop.set_exception_handler(_exception_handler)
 
     def _make_handler(sig: signal.Signals):
         def _handler(signum, frame):

@@ -53,14 +53,17 @@ def make_handler(upstream: str) -> type:
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length else None
 
-            # The CLI always sends absolute paths like /v1/messages, /v1/models/...
-            # Strip the leading /v1 prefix so the upstream base URL controls versioning.
-            # Examples:
-            #   upstream=https://api.kimi.com/coding/v1  + /v1/messages → /messages  ✓
-            #   upstream=https://open.bigmodel.cn/api/paas/v4 + /v1/messages → /messages  ✓
-            #   upstream=https://api.anthropic.com (no /v1) → proxy never starts  ✓
+            # The CLI sends absolute paths like /v1/messages, /v1/models/...
+            # Smart stripping: only remove the /v1 prefix from the request path
+            # when the upstream URL already contains a version prefix (e.g. /v1, /v4).
+            # This prevents double-versioning for providers like Kimi:
+            #   upstream=https://api.kimi.com/coding/v1  + /v1/messages → strip → /messages ✓
+            # While preserving /v1 for mirrors like aicodemirror:
+            #   upstream=https://api.aicodemirror.com/api/claudecode + /v1/messages → keep → /v1/messages ✓
+            import re, sys
+            has_version_suffix = bool(re.search(r'/v\d+/?$', upstream.rstrip('/')))
             path = self.path
-            if path.startswith("/v1"):
+            if has_version_suffix and path.startswith("/v1"):
                 path = path[3:]  # strip /v1 prefix, keep /messages etc.
 
             url = upstream.rstrip("/") + path
@@ -69,10 +72,13 @@ def make_handler(upstream: str) -> type:
                 if k.lower() not in ("host", "content-length", "transfer-encoding")
             }
 
+            print(f"[PROXY] {method} {url}", file=sys.stderr)
+
             req = urllib.request.Request(url, data=body, headers=headers, method=method)
             try:
                 with urllib.request.urlopen(req) as resp:
                     resp_body = resp.read()
+                    print(f"[PROXY] Response: {resp.status}", file=sys.stderr)
                     self.send_response(resp.status)
                     for k, v in resp.headers.items():
                         if k.lower() not in ("transfer-encoding", "connection"):
@@ -81,6 +87,7 @@ def make_handler(upstream: str) -> type:
                     self.wfile.write(resp_body)
             except urllib.error.HTTPError as e:
                 resp_body = e.read()
+                print(f"[PROXY] HTTP Error {e.code}: {resp_body[:500]}", file=sys.stderr)
                 self.send_response(e.code)
                 for k, v in e.headers.items():
                     if k.lower() not in ("transfer-encoding", "connection"):
