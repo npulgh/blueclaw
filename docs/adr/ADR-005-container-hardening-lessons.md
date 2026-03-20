@@ -98,13 +98,27 @@ Phase 4 实现了容器安全加固（`--read-only`、`--cap-drop ALL`、`--secu
 
 ### 遗留 3：streaming chars=0 时无 IPC 写入
 
-**状态**: 设计缺陷，需修复
+**状态**: ✅ 已修复（2026-03-20）
 
 **现象**: API 返回空响应时，streaming 路径不写任何 outbox 文件，host 端 consumer 永久等待 IPC 消息，最终超时。
 
 **影响**: 任何导致空响应的情况（API 错误、空 prompt、token 耗尽）都会导致 adapter 无响应。
 
-**修复建议**: 在 `container/agent-runner/main.py` 的 streaming 路径末尾，若 `chars=0`，强制写一个 `send_message` IPC 文件（内容为空字符串或错误提示）。
+**修复**: 在 `container/agent-runner/main.py` 的 streaming 路径末尾，若 `response` 为空，强制写一个 `send_message` IPC 文件（内容 `[Agent returned empty response]`）。同时修复了 ephemeral 和 persistent 两条路径。
+
+---
+
+### 问题 5（新增）：IPC 挂载路径双层 group
+
+**状态**: ✅ 已修复（2026-03-20）
+
+**现象**: 容器写 IPC 文件到 `data/ipc/{group}/{group}/outbox/`，host watcher 监听 `data/ipc/{group}/outbox/`，路径不匹配导致 adapter 收不到消息。
+
+**根因**: host 端 `ipc_dir` = `data/ipc/{group}` 挂载到容器 `/workspace/ipc`。容器内 `ipc_bridge._get_outbox()` 拼接 `{ipc_base}/{group}/outbox` = `/workspace/ipc/{group}/outbox`，实际对应 host 的 `data/ipc/{group}/{group}/outbox`——多了一层 group。
+
+**修复**: `src/main.py` 中 `ipc_dir` 从 `data/ipc/{group}` 改为 `data/ipc`（不带 group），挂载整个 IPC 根目录到 `/workspace/ipc`。容器内 `ipc_bridge` 拼接 `/{group}/outbox` 后路径与 host watcher 完全对齐。
+
+**教训**: 容器挂载路径与容器内代码的路径拼接逻辑必须端到端验证。单独测试任一端都无法发现此类 off-by-one-directory 错误。
 
 ---
 
@@ -118,7 +132,9 @@ Phase 4 实现了容器安全加固（`--read-only`、`--cap-drop ALL`、`--secu
 
 3. **错误路径的 IPC 契约**: `container/agent-runner/main.py` 的错误路径（`sys.exit(1)`）会写 IPC 错误消息，但空响应路径不会。IPC 契约应规定：**任何执行路径结束时都必须写至少一个 outbox 文件**（成功或失败），否则 host 端无法区分"容器正在运行"和"容器已完成但无输出"。
 
-4. **环境变量的显式传递**: 容器是隔离环境，宿主机的环境变量不自动继承。所有容器需要的配置（`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 等）必须在 `_build_command` 中显式列出，不能依赖隐式继承。
+5. **IPC 路径端到端验证**: 容器挂载路径与容器内代码的路径拼接逻辑必须端到端验证。host 传 `data/ipc/{group}` 挂载到 `/workspace/ipc`，容器内又拼 `/{group}/outbox`，导致双层 group。单独测试任一端都无法发现此类 off-by-one-directory 错误。必须在 E2E 测试中验证实际文件路径。
+
+6. **空响应的 IPC 契约**: streaming 路径在 API 返回空响应时不写任何 outbox 文件，导致 host 端永久等待。IPC 契约应规定：**任何执行路径结束时都必须写至少一个 outbox 文件**（成功或失败），否则 host 端无法区分"容器正在运行"和"容器已完成但无输出"。
 
 ### Docker --read-only 检查清单
 
