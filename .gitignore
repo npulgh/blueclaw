@@ -76,3 +76,6 @@ Thumbs.db
 *.db-shm
 *.db-wal
 docs/archive/spike-data/test_socket/lat.sock
+
+# Private notes (not for version control)
+notes/

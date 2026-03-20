@@ -746,3 +746,117 @@ lynxclaw/
 ├── pyproject.toml
 └── .env.example
 ```
+
+---
+
+## 十、v2 架构升级方案（NanoClaw 借鉴）
+
+> 来源：NanoClaw（[qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw)）架构分析。
+> 分析时间：2026-03-21。
+> 原则：只借鉴 Lynxclaw 缺失且收益明确的设计，不照搬。
+
+### 10.1 Credential Proxy——凭证永不入容器（P0）
+
+**现状问题**：`ANTHROPIC_API_KEY` 通过 `-e` 直接注入容器环境变量。容器运行期间，Agent 可通过 `env` 或 `/proc/self/environ` 读取明文 key。虽然容器是临时的（`--rm`），但 prompt injection 攻击窗口存在。
+
+**NanoClaw 方案**：宿主运行 HTTP Credential Proxy，容器只收到 `ANTHROPIC_BASE_URL=http://host:port` + placeholder key。Proxy 拦截请求，注入真实 Authorization header，转发到上游。
+
+**Lynxclaw 融入设计**：
+
+```text
+容器内 Agent
+  └─ ANTHROPIC_BASE_URL=http://127.0.0.1:9099  (容器内 api_proxy)
+       └─ 转发到 http://proxy-sidecar:3001      (宿主侧 credential proxy)
+            └─ 注入 ANTHROPIC_API_KEY
+            └─ 转发到真实 upstream (api.anthropic.com 或第三方镜像)
+```
+
+- 复用现有 Proxy Sidecar 架构（`src/proxy.py`），扩展其职责
+- 容器内 `api_proxy.py` 的模型验证拦截功能保持不变
+- 容器环境变量中不再包含 `ANTHROPIC_API_KEY`
+- 需新增 ADR-006 记录此决策
+
+**影响范围**：`src/proxy.py`、`src/container_manager.py`、`container/agent-runner/api_proxy.py`
+
+### 10.2 Skills 扩展系统——无代码扩展 Agent 能力（P0）
+
+**现状问题**：Agent 能力完全由 `container/agent-runner/main.py` + hooks 决定。用户无法在不改代码的情况下扩展 Agent 行为（如添加领域知识、自定义工具使用规则）。
+
+**NanoClaw 方案**：`.claude/skills/{skill-name}/SKILL.md` 文件系统，Agent 启动时自动加载。
+
+**Lynxclaw 融入设计**：
+
+```text
+groups/
+  skills/                          ← 全局技能（所有 Group 可用）
+    code-review/SKILL.md
+    doc-writer/SKILL.md
+  {group-name}/
+    skills/                        ← Group 专属技能
+      custom-tool/SKILL.md
+    CLAUDE.md
+```
+
+- Agent Runner 启动时扫描 `/workspace/global/skills/` + `/workspace/group/skills/`
+- 将 SKILL.md 内容注入 system prompt（在 CLAUDE.md 之后）
+- 技能文件为纯 Markdown，描述 Agent 的额外能力、工具使用规则、领域知识
+- 挂载方式：`groups/skills/` → `/workspace/global/skills/:ro`（已被 global_dir 覆盖）
+
+**影响范围**：`container/agent-runner/main.py`、`src/memory.py`、`src/container_manager.py`
+
+### 10.3 安全配置外置（P1）
+
+**现状问题**：`blocked_patterns` 和 `blocked_commands` 存在 `lynxclaw.config.yaml` 中（项目根目录），安全策略与业务配置混合。
+
+**NanoClaw 方案**：挂载白名单存储在 `~/.config/nanoclaw/mount-allowlist.json`（项目根目录之外）。
+
+**Lynxclaw 融入设计**：
+
+- 新增 `~/.config/lynxclaw/security.yaml`，包含 `blocked_patterns`、`blocked_commands`、环境变量白名单
+- `lynxclaw.config.yaml` 只保留业务配置
+- `src/config.py` 加载时合并两个配置源
+- 安全配置文件永远不挂入容器
+
+**影响范围**：`src/config.py`、`src/container_manager.py`
+
+### 10.4 环境变量白名单（P1）
+
+**现状问题**：`_build_command()` 中 `env_vars` 由调用方决定传什么，ContainerManager 层面无过滤。
+
+**融入设计**：在 `_build_command()` 中增加前缀白名单检查：
+
+```python
+_ALLOWED_ENV_PREFIXES = {"ANTHROPIC_", "LYNXCLAW_", "CLAUDE_CODE_DISABLE_"}
+```
+
+不匹配的环境变量被拦截并记录 warning。实现 Credential Proxy 后，`ANTHROPIC_API_KEY` 也从白名单中移除。
+
+**影响范围**：`src/container_manager.py`
+
+### 10.5 Channel 自注册（P2）
+
+**现状问题**：`discover_adapters()` 工厂函数中每个 Channel 需手动添加 `if config.xxx.enabled` 分支。
+
+**NanoClaw 方案**：Channel 在模块加载时调用 `registerChannel()` 自注册，缺少凭证自动跳过。
+
+**Lynxclaw 融入设计**：
+
+- 每个 adapter 模块定义 `CHANNEL_NAME` 和 `create_adapter(config) -> Optional[ChannelAdapter]`
+- `discover_adapters()` 改为扫描 `src/channels/` 目录，动态导入并调用 `create_adapter()`
+- 缺少凭证时返回 `None`，自动跳过
+
+**触发条件**：当 Channel 数量增长到 4+ 时实施。当前 2 个 Channel 不值得重构。
+
+**影响范围**：`src/channels/registry.py`、各 adapter 模块
+
+### 10.6 Sender Allowlist——消息预过滤（P2）
+
+**NanoClaw 方案**：`src/sender-allowlist.ts` 在消息进入路由前过滤，减少无效容器启动。
+
+**Lynxclaw 融入设计**：
+
+- 在 `lynxclaw.config.yaml` 的 group 配置中增加 `allowed_senders: []`（空 = 不限制）
+- Router 在 trigger 匹配后、入队前检查 `sender_id` 是否在白名单中
+- 不在白名单的消息返回 `RouteResult.UNAUTHORIZED`
+
+**影响范围**：`src/router.py`、`src/config.py`
