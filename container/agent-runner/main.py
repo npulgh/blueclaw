@@ -137,12 +137,20 @@ async def run_agent(
             captured_session_id = event.data["session_id"]
 
         # Collect token usage from usage events
+        # TaskProgressMessage / TaskNotificationMessage: usage is TaskUsage TypedDict
+        #   with "total_tokens" (no input/output breakdown)
+        # ResultMessage: usage is dict[str, Any], may have detailed breakdown
         if hasattr(event, "usage") and event.usage is not None:
             usage = event.usage
-            if hasattr(usage, "input_tokens") and usage.input_tokens is not None:
-                total_input_tokens += int(usage.input_tokens)
-            if hasattr(usage, "output_tokens") and usage.output_tokens is not None:
-                total_output_tokens += int(usage.output_tokens)
+            if isinstance(usage, dict):
+                # ResultMessage.usage — prefer input/output breakdown if available
+                if "input_tokens" in usage:
+                    total_input_tokens = int(usage["input_tokens"])
+                if "output_tokens" in usage:
+                    total_output_tokens = int(usage["output_tokens"])
+                # Fallback: split total_tokens evenly as rough estimate
+                if "total_tokens" in usage and total_input_tokens == 0 and total_output_tokens == 0:
+                    total_input_tokens = int(usage["total_tokens"])
 
         # Collect text from assistant messages
         if hasattr(event, "content"):
@@ -165,6 +173,29 @@ async def run_agent(
         await on_chunk("", True)
 
     return full_text, captured_session_id, total_input_tokens, total_output_tokens
+
+
+async def _run_with_resume_fallback(
+    prompt: str,
+    session_id: str,
+    hooks: dict,
+    api_key: str,
+    *,
+    on_chunk: "Any | None" = None,
+) -> tuple[str, str, int, int]:
+    """Try run_agent with resume; on failure, retry as new session.
+
+    Third-party API mirrors (Kimi, REDACTED, etc.) may not support the
+    SDK's resume feature. When resume fails, we fall back to a fresh session
+    so the user still gets a response instead of an error.
+    """
+    if not session_id:
+        return await run_agent(prompt, "", hooks, api_key, on_chunk=on_chunk)
+    try:
+        return await run_agent(prompt, session_id, hooks, api_key, on_chunk=on_chunk)
+    except Exception as exc:
+        log.warning("resume failed, retrying as new session", session_id=session_id, error=str(exc))
+        return await run_agent(prompt, "", hooks, api_key, on_chunk=on_chunk)
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +281,7 @@ async def main() -> None:
                     ipc_base=ipc_base,
                 )
 
-            response, new_session_id, input_tokens, output_tokens = await run_agent(
+            response, new_session_id, input_tokens, output_tokens = await _run_with_resume_fallback(
                 prompt, session_id, hooks, api_key, on_chunk=on_chunk
             )
             log.info("agent done (streaming)", chars=len(response))
@@ -267,7 +298,7 @@ async def main() -> None:
                 log.warning("agent empty response, wrote fallback IPC")
         else:
             # Non-streaming path: collect full response, then send_message
-            response, new_session_id, input_tokens, output_tokens = await run_agent(
+            response, new_session_id, input_tokens, output_tokens = await _run_with_resume_fallback(
                 prompt, session_id, hooks, api_key
             )
             send_message(group=group, chat_id=chat_id, text=response, ipc_base=ipc_base)
@@ -411,7 +442,7 @@ async def persistent_loop(group: str, ipc_base: str) -> None:
                             is_final=is_final,
                             ipc_base=ipc_base,
                         )
-                    response, new_session_id, in_tok, out_tok = await run_agent(
+                    response, new_session_id, in_tok, out_tok = await _run_with_resume_fallback(
                         prompt, session_id, hooks, api_key, on_chunk=on_chunk
                     )
                     # Fallback for empty streaming response (same as ephemeral path)
@@ -424,7 +455,7 @@ async def persistent_loop(group: str, ipc_base: str) -> None:
                         )
                         log.warning("agent empty response, wrote fallback IPC")
                 else:
-                    response, new_session_id, in_tok, out_tok = await run_agent(
+                    response, new_session_id, in_tok, out_tok = await _run_with_resume_fallback(
                         prompt, session_id, hooks, api_key
                     )
                     send_message(group=group, chat_id=chat_id, text=response, ipc_base=ipc_base)
