@@ -53,7 +53,7 @@ src/
   router.py               # Message routing (idempotency + backpressure)
   container_manager.py    # Container lifecycle (hardened + concurrency)
   ipc.py                  # IPC Watcher (watchdog on_created + on_moved)
-  db.py                   # SQLite + migrations, 6 tables, schema v2
+  db.py                   # SQLite + migrations, 7 tables, schema v2
   scheduler.py            # Cron task scheduler
   proxy.py                # Network proxy sidecar
   observability.py        # structlog + Prometheus metrics
