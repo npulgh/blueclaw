@@ -390,19 +390,17 @@
 
 ## 遗留问题（Backlog）
 
-> 以下问题在 E2E 测试阶段发现，已记录但尚未修复。详见 [ADR-005-container-hardening-lessons.md](adr/ADR-005-container-hardening-lessons.md)。
+> 以下问题在 E2E 测试阶段发现。详见 [ADR-005-container-hardening-lessons.md](adr/ADR-005-container-hardening-lessons.md)。
 
-### BUG-001: 空响应不写 IPC outbox
+### ~~BUG-001: 空响应不写 IPC outbox~~ ✅ 已修复（2026-03-20）
 
-**文件**: `container/agent-runner/main.py`
+**修复**: `container/agent-runner/main.py` 在 streaming 路径末尾检测 `not response`，写 fallback `send_message` IPC 文件。ephemeral + persistent 两条路径均已修复。
 
-**现象**: API 返回空响应（`chars=0`）时，streaming 路径不写任何 outbox 文件，host 端 adapter 永远收不到回复，`test_adapter_receives_reply` 超时。
+---
 
-**根因**: `on_chunk` 回调从未被调用，`send_message` 也未被调用。容器 exit 0，但 IPC 无输出。
+### ~~BUG-003: IPC 挂载路径双层 group~~ ✅ 已修复（2026-03-20）
 
-**修复方向**: 在 streaming 路径末尾，若 `len(response) == 0`，强制写一个 `send_message` IPC 文件（空字符串或 `[Agent returned empty response]`）。
-
-**验收**: `test_adapter_receives_reply` 在 API 返回空响应时，adapter 收到一条消息（即使内容为空）。
+**修复**: `src/main.py` 中 `ipc_dir` 从 `data/ipc/{group}` 改为 `data/ipc`，容器内 `ipc_bridge` 拼接 `/{group}/outbox` 后路径与 host watcher 对齐。
 
 ---
 
@@ -414,4 +412,4 @@
 
 **根因**: 测试假设 API 总是返回非空内容。当使用第三方 proxy（如 `api.claudecode.net.cn`）时，可能返回空响应。
 
-**修复方向**: 测试应接受 `len(adapter.sent) > initial_sent`（至少一条新消息），或在 BUG-001 修复后自然通过。
+**修复方向**: 测试应接受 `len(adapter.sent) > initial_sent`（至少一条新消息），或换用可靠的 API endpoint。BUG-001 修复后 fallback IPC 已写入，但测试断言条件仍需调整。
