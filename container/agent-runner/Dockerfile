@@ -14,8 +14,11 @@ COPY container/agent-runner/ ./runner/
 # Pre-create all volume mount points so they exist under --read-only.
 # Docker requires mount point directories to exist in the image when
 # the root filesystem is read-only.
+# Note: /workspace/global_memory/CLAUDE.md is created as a file (not directory)
+# because the host bind-mounts a single file here.
 RUN mkdir -p /workspace/group /workspace/ipc /workspace/global \
-             /workspace/project /workspace/global_memory
+             /workspace/project /workspace/global_memory \
+    && touch /workspace/global_memory/CLAUDE.md
 
 # Working directory for the agent process is the group dir (mounted at runtime)
 WORKDIR /workspace/group

@@ -306,7 +306,7 @@ class ContainerManager:
             "global_dir":     "/workspace/global:ro",
             "project_dir":    "/workspace/project:ro",
             "ipc_dir":        "/workspace/ipc:rw",
-            "global_memory":  "/workspace/global_memory:rw",
+            "global_memory":  "/workspace/global_memory/CLAUDE.md:rw",
         }
         for key, container_path in _mount_map.items():
             # global_memory is only added for main groups
