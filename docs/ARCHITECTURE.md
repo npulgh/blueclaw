@@ -158,7 +158,8 @@ docker run --rm \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
   --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=256m \
+  --tmpfs /tmp:rw,nosuid,size=256m \
+  --tmpfs /home/agent:rw,nosuid,size=64m,uid=1000,gid=1000 \
   --pids-limit 256 \
   --user 1000:1000 \
   --network none \
@@ -166,14 +167,24 @@ docker run --rm \
   --cpus 1.0 \
   -v {group_dir}:/workspace/group:rw \
   -v {global_dir}:/workspace/global:ro \
+  -v {global_memory}:/workspace/global_memory/CLAUDE.md:rw \   # Main Group only
   -v {project_dir}:/workspace/project:ro \
   -v {ipc_dir}:/workspace/ipc:rw \
   -v {proxy_vol}:/proxy:rw \           # 可选，仅启用 Proxy Sidecar 时挂载
   -e ANTHROPIC_API_KEY \
+  -e ANTHROPIC_BASE_URL \              # 第三方镜像站时设置
+  -e ANTHROPIC_AUTH_TOKEN \            # 部分镜像站要求设为空字符串
+  -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \  # 第三方镜像时禁止非必要请求
   -e LYNXCLAW_GROUP={group} \
   -e LYNXCLAW_SESSION_ID={session_id} \
   lynxclaw-agent:latest
 ```
+
+> **加固教训**（详见 [ADR-005-container-hardening-lessons.md](adr/ADR-005-container-hardening-lessons.md)）：
+> - `/tmp` tmpfs 省略 `noexec` — Node.js JIT 需要可执行内存映射
+> - `/home/agent` tmpfs 必需 — Claude Code CLI 启动时写 `~/.claude.json`
+> - 挂载目标必须在 Dockerfile 中 `mkdir -p` + `touch` 预创建
+> - 文件不能挂载到目录（`groups/CLAUDE.md` → `/workspace/global_memory/CLAUDE.md`）
 
 #### 并发控制
 
@@ -271,7 +282,65 @@ async with ClaudeSDKClient(options=ClaudeAgentOptions(mcp_servers={...})) as cli
     await client.query(prompt)
 ```
 
-### 3.7 流式响应
+### 3.7 第三方 API 镜像集成
+
+**文件**：`container/agent-runner/api_proxy.py`、`container/agent-runner/main.py`
+
+Lynxclaw 支持 Anthropic 原生 API 和第三方兼容 endpoint（如 REDACTED、Kimi K2）。
+
+#### 请求链路
+
+```text
+Claude Agent SDK (Python)
+  └─ 启动 Claude Code CLI (Node.js 子进程)
+       └─ 读取 ANTHROPIC_BASE_URL 环境变量
+            └─ 发送 GET /v1/models/{id}?beta=true (模型验证)
+            └─ 发送 POST /v1/messages (实际对话)
+```
+
+> **关键规则**：Claude Code CLI **自动**在 `ANTHROPIC_BASE_URL` 后追加 `/v1/messages`。
+> 因此 `ANTHROPIC_BASE_URL` **绝不能**包含 `/v1` 后缀。
+
+#### 容器内 API Proxy
+
+第三方 endpoint 通常不实现 `GET /v1/models/{id}` 验证接口，CLI 会因 404 而中止。
+容器内 `api_proxy.py` 解决此问题：
+
+```text
+CLI → http://127.0.0.1:9099/v1/models/{id}  → Proxy 返回 fake 200
+CLI → http://127.0.0.1:9099/v1/messages      → Proxy 转发到真实 upstream
+```
+
+**智能路径处理**：Proxy 根据 upstream URL 是否已含版本前缀（`/v1`、`/v4`）决定是否剥离请求路径中的 `/v1`：
+
+| upstream URL | 含版本前缀？ | 请求 `/v1/messages` | 转发结果 |
+| ---- | ---- | ---- | ---- |
+| `api.example.com/v1` | 是 | 剥离 `/v1` → `/messages` | `.../coding/v1/messages` ✓ |
+| `api.example.com/api` | 否 | 保留 `/v1/messages` | `.../api/claudecode/v1/messages` ✓ |
+
+#### 必需环境变量
+
+| 变量 | 用途 | 示例 |
+| ---- | ---- | ---- |
+| `ANTHROPIC_BASE_URL` | 第三方 endpoint（不含 `/v1`） | `https://api.example.com/api` |
+| `ANTHROPIC_AUTH_TOKEN` | 部分镜像要求设为空字符串 | `""` |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | 禁止 CLI 访问 `api.anthropic.com`（GFW 下必需） | `1` |
+
+### 3.8 GFW 环境网络策略
+
+在中国大陆部署时，`api.telegram.org` 被 GFW 封锁，而国内 API 镜像（如 `api.example.com`、`api.example.com`）可直连。需要分层代理策略：
+
+| 组件 | 目标 | 网络策略 |
+| ---- | ---- | ---- |
+| Host — Telegram Adapter | `api.telegram.org` | 需代理（`HTTPS_PROXY` → Clash 等） |
+| Host — aiogram Session | `api.telegram.org` | `AiohttpSession(proxy=...)` + `aiohttp-socks` |
+| Container — API Proxy | 国内 API 镜像 | 直连（`--network bridge`），**不转发** `HTTPS_PROXY` |
+| Container — Proxy Sidecar | 外部搜索 | Unix Socket 白名单代理（`--network none` 模式） |
+
+> **陷阱**：Python `aiohttp` / `urllib` 不自动使用系统代理。必须显式配置。
+> 将 `HTTPS_PROXY` 转发到容器会导致国内 API 走海外代理节点，反而 `ConnectionRefused`。
+
+### 3.9 流式响应
 
 Agent 边生成边推送，宿主收到 `stream_chunk` 后转发到 IM：
 
@@ -286,7 +355,7 @@ Agent 边生成边推送，宿主收到 `stream_chunk` 后转发到 IM：
 | Telegram | `edit_message_text()` 覆盖整条消息 |
 | 飞书 | `PATCH /im/v1/messages/:id` 更新 Interactive Card |
 
-### 3.8 网络代理（Proxy Sidecar）
+### 3.10 网络代理（Proxy Sidecar）
 
 默认 `--network none`。需 Web 搜索时通过 Unix Socket 代理受控出站。
 
@@ -305,7 +374,7 @@ Proxy Sidecar 容器 (lynxclaw-proxy, --network bridge)
 即使 Agent 被 prompt injection 劫持，也无法访问白名单外的域名。
 Unix Socket RTT P50=0.060ms / P99=0.064ms（Spike S3 实测），对代理链路性能无影响。
 
-### 3.9 可观测性
+### 3.11 可观测性
 
 **文件**：`src/observability.py`
 
@@ -475,7 +544,7 @@ container:
   image: lynxclaw-agent:latest
   memory: 512m
   cpus: 1.0
-  network: none                     # none | proxy
+  network: none                     # none | bridge | proxy
   timeout: 300
   max_concurrent: 5
   lifecycle: ephemeral              # ephemeral | resumable
@@ -537,7 +606,8 @@ lynxclaw/
 │       ├── requirements.txt
 │       ├── Dockerfile
 │       ├── main.py             # Agent 入口（含 hooks）
-│       └── ipc_bridge.py       # MCP Server → IPC 文件
+│       ├── ipc_bridge.py       # MCP Server → IPC 文件
+│       └── api_proxy.py        # 第三方 API 模型验证拦截 + 请求转发
 ├── groups/
 │   ├── CLAUDE.md
 │   └── {group-name}/CLAUDE.md
@@ -548,6 +618,7 @@ lynxclaw/
 ├── docs/
 │   ├── ARCHITECTURE.md         # 本文件
 │   ├── TASKS.md                # 开发任务清单
+│   ├── DEBUG-API-MIRROR.md     # 第三方 API 镜像调试记录
 │   └── adr/                    # 架构决策记录
 ├── lynxclaw.config.yaml
 ├── docker-compose.yml

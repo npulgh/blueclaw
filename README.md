@@ -83,12 +83,22 @@ ANTHROPIC_API_KEY=sk-ant-...
 TELEGRAM_BOT_TOKEN=你的token
 ```
 
-也支持 Anthropic 兼容 endpoint（如 Kimi K2）：
+也支持 Anthropic 兼容 endpoint（如 Kimi K2、REDACTED）：
 
 ```
+# Kimi K2
 ANTHROPIC_API_KEY=sk-kimi-...
 ANTHROPIC_BASE_URL=https://api.example.com/v1
+
+# 或 REDACTED（国内镜像，注意 URL 不含 /v1）
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_BASE_URL=https://api.example.com/api
+ANTHROPIC_AUTH_TOKEN=
 ```
+
+> **注意**：`ANTHROPIC_BASE_URL` 不要以 `/v1` 结尾（CLI 会自动追加）。
+> 使用 REDACTED 时必须设置 `ANTHROPIC_AUTH_TOKEN=`（空值）。
+> 详见 [docs/DEBUG-API-MIRROR.md](docs/DEBUG-API-MIRROR.md)。
 
 Step 3 — 获取 `chat_id`。先给 bot 发一条任意消息，然后在浏览器打开：
 
