@@ -30,29 +30,45 @@
 ## 二、整体架构
 
 ```text
-┌──────────────────────────────────────────────────────────────────┐
-│                     Lynxclaw Host Process (Python / asyncio)      │
-│                                                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐       │
-│  │  Telegram    │  │   Feishu    │  │  Future Channel    │       │
-│  │  Adapter     │  │   Adapter   │  │  (extensible)      │       │
-│  └──────┬──────┘  └──────┬──────┘  └────────┬───────────┘       │
-│         └────────────────┼──────────────────┘                    │
-│  ┌───────────────────────▼───────────────────────────────────┐   │
-│  │                  Channel Registry                          │   │
-│  └───────────────────────┬───────────────────────────────────┘   │
-│  ┌───────────────────────▼───────────────────────────────────┐   │
-│  │   Message Router (dedup → trigger → group queue → dispatch)│   │
-│  └───────────────────────┬───────────────────────────────────┘   │
-│  ┌───────────────────────▼───────────────────────────────────┐   │
-│  │   Container Manager (lifecycle / hardening / circuit break) │   │
-│  └───────────────────────┬───────────────────────────────────┘   │
-│                           │                                      │
-│  ┌──────────┐  ┌─────────▼────┐  ┌───────────┐  ┌───────────┐  │
-│  │ SQLite   │  │ IPC Watcher  │  │ Scheduler  │  │ Net Proxy │  │
-│  │ (state)  │  │ (watchdog)   │  │ (asyncio)  │  │ (sidecar) │  │
-│  └──────────┘  └──────────────┘  └───────────┘  └───────────┘  │
-└──────────────────────────┬───────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                   Lynxclaw Host Process (Python / asyncio)            │
+│                                                                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐           │
+│  │  Telegram    │  │   Feishu    │  │  Future Channel    │           │
+│  │  Adapter     │  │   Adapter   │  │  (extensible)      │           │
+│  └──────┬──────┘  └──────┬──────┘  └────────┬───────────┘           │
+│         └────────────────┼──────────────────┘                        │
+│  ┌───────────────────────▼───────────────────────────────────────┐   │
+│  │                    Channel Registry                            │   │
+│  └───────────────────────┬───────────────────────────────────────┘   │
+│  ┌───────────────────────▼───────────────────────────────────────┐   │
+│  │   Message Router (dedup → trigger → group queue → dispatch)    │   │
+│  └───────────────────────┬───────────────────────────────────────┘   │
+│  ┌───────────────────────▼───────────────────────────────────────┐   │
+│  │   Container Manager (lifecycle / hardening / concurrency)      │   │
+│  └──────────┬────────────────────────────────┬───────────────────┘   │
+│             │ ephemeral / resumable           │ persistent            │
+│             ▼                                 ▼                      │
+│  ┌────────────────────┐           ┌─────────────────────┐           │
+│  │ docker run (--rm)  │           │ PersistentContainer  │           │
+│  └────────────────────┘           │ (long-running +      │           │
+│                                   │  heartbeat + inbox)   │           │
+│                                   └─────────────────────┘           │
+│                                                                      │
+│  ┌──────────┐ ┌──────────────┐ ┌───────────┐ ┌───────────┐         │
+│  │ SQLite   │ │ IPC Watcher  │ │ Scheduler │ │ Net Proxy │         │
+│  │ (state)  │ │ (watchdog)   │ │ (croniter)│ │ (sidecar) │         │
+│  └──────────┘ └──────────────┘ └───────────┘ └───────────┘         │
+│                                                                      │
+│  ┌──────────────┐ ┌────────────────┐ ┌───────────┐ ┌────────────┐  │
+│  │ Stream       │ │ Swarm          │ │ Memory    │ │ CLI        │  │
+│  │ Debouncer    │ │ Coordinator    │ │ Manager   │ │ (管理工具) │  │
+│  └──────────────┘ └────────────────┘ └───────────┘ └────────────┘  │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │         Observability (structlog + Prometheus + audit)          │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────┬───────────────────────────────────────────┘
                            │ docker run (hardened)
             ┌──────────────▼──────────────────────┐
             │        Docker Container              │
@@ -65,6 +81,7 @@
             │  │  Built-in: Bash Read Write Edit │  │
             │  │  MCP: lynxclaw IPC bridge       │  │
             │  │  Hooks: PreToolUse / PostToolUse│  │
+            │  │  API Proxy (第三方镜像时)       │  │
             │  └────────────────────────────────┘  │
             │                                      │
             │  Mounts:                             │
@@ -149,7 +166,7 @@ class OutgoingMessage:
 | ---- | ---- | ---- |
 | **Ephemeral**（默认） | 一次性问答 | `--rm`，用完即毁 |
 | **Resumable** | 多轮对话 | 销毁容器，session_id 持久化到 DB，下次传 `resume=` |
-| **Persistent**（Phase 4） | 常驻 Agent | 长期运行，心跳保活 |
+| **Persistent** | 常驻 Agent | 长期运行，心跳保活，通过 inbox 接收 prompt（见 §3.12） |
 
 #### 加固启动参数
 
@@ -158,7 +175,8 @@ docker run --rm \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
   --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=256m \
+  --tmpfs /tmp:rw,nosuid,size=256m \
+  --tmpfs /home/agent:rw,nosuid,size=64m,uid=1000,gid=1000 \
   --pids-limit 256 \
   --user 1000:1000 \
   --network none \
@@ -166,14 +184,24 @@ docker run --rm \
   --cpus 1.0 \
   -v {group_dir}:/workspace/group:rw \
   -v {global_dir}:/workspace/global:ro \
+  -v {global_memory}:/workspace/global_memory/CLAUDE.md:rw \   # Main Group only
   -v {project_dir}:/workspace/project:ro \
   -v {ipc_dir}:/workspace/ipc:rw \
   -v {proxy_vol}:/proxy:rw \           # 可选，仅启用 Proxy Sidecar 时挂载
   -e ANTHROPIC_API_KEY \
+  -e ANTHROPIC_BASE_URL \              # 第三方镜像站时设置
+  -e ANTHROPIC_AUTH_TOKEN \            # 部分镜像站要求设为空字符串
+  -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \  # 第三方镜像时禁止非必要请求
   -e LYNXCLAW_GROUP={group} \
   -e LYNXCLAW_SESSION_ID={session_id} \
   lynxclaw-agent:latest
 ```
+
+> **加固教训**（详见 [ADR-005-container-hardening-lessons.md](adr/ADR-005-container-hardening-lessons.md)）：
+> - `/tmp` tmpfs 省略 `noexec` — Node.js JIT 需要可执行内存映射
+> - `/home/agent` tmpfs 必需 — Claude Code CLI 启动时写 `~/.claude.json`
+> - 挂载目标必须在 Dockerfile 中 `mkdir -p` + `touch` 预创建
+> - 文件不能挂载到目录（`groups/CLAUDE.md` → `/workspace/global_memory/CLAUDE.md`）
 
 #### 并发控制
 
@@ -233,6 +261,7 @@ data/ipc/{group}/
 | `list_tasks` | 容器→宿主 | 列出任务 |
 | `cancel_task` | 容器→宿主 | 取消任务 |
 | `read_context` | 容器→宿主 | 读取共享上下文 |
+| `delegate_task` | 容器→宿主 | 跨 Group 任务委派（见 §3.14） |
 
 ### 3.6 Agent Runner 与安全钩子
 
@@ -271,22 +300,83 @@ async with ClaudeSDKClient(options=ClaudeAgentOptions(mcp_servers={...})) as cli
     await client.query(prompt)
 ```
 
-### 3.7 流式响应
+### 3.7 第三方 API 镜像集成
 
-Agent 边生成边推送，宿主收到 `stream_chunk` 后转发到 IM：
+**文件**：`container/agent-runner/api_proxy.py`、`container/agent-runner/main.py`
 
-1. 首块：`send_message()` 发送，拿到平台 msg_id
-2. 后续块：`edit_message(msg_id)` 覆盖更新
+Lynxclaw 支持 Anthropic 原生 API 和第三方兼容 endpoint（如 aicodemirror、Kimi K2）。
+
+#### 请求链路
+
+```text
+Claude Agent SDK (Python)
+  └─ 启动 Claude Code CLI (Node.js 子进程)
+       └─ 读取 ANTHROPIC_BASE_URL 环境变量
+            └─ 发送 GET /v1/models/{id}?beta=true (模型验证)
+            └─ 发送 POST /v1/messages (实际对话)
+```
+
+> **关键规则**：Claude Code CLI **自动**在 `ANTHROPIC_BASE_URL` 后追加 `/v1/messages`。
+> 因此 `ANTHROPIC_BASE_URL` **绝不能**包含 `/v1` 后缀。
+
+#### 容器内 API Proxy
+
+第三方 endpoint 通常不实现 `GET /v1/models/{id}` 验证接口，CLI 会因 404 而中止。
+容器内 `api_proxy.py` 解决此问题：
+
+```text
+CLI → http://127.0.0.1:9099/v1/models/{id}  → Proxy 返回 fake 200
+CLI → http://127.0.0.1:9099/v1/messages      → Proxy 转发到真实 upstream
+```
+
+**智能路径处理**：Proxy 根据 upstream URL 是否已含版本前缀（`/v1`、`/v4`）决定是否剥离请求路径中的 `/v1`：
+
+| upstream URL | 含版本前缀？ | 请求 `/v1/messages` | 转发结果 |
+| ---- | ---- | ---- | ---- |
+| `api.kimi.com/coding/v1` | 是 | 剥离 `/v1` → `/messages` | `.../coding/v1/messages` ✓ |
+| `api.aicodemirror.com/api/claudecode` | 否 | 保留 `/v1/messages` | `.../api/claudecode/v1/messages` ✓ |
+
+#### 必需环境变量
+
+| 变量 | 用途 | 示例 |
+| ---- | ---- | ---- |
+| `ANTHROPIC_BASE_URL` | 第三方 endpoint（不含 `/v1`） | `https://api.aicodemirror.com/api/claudecode` |
+| `ANTHROPIC_AUTH_TOKEN` | 部分镜像要求设为空字符串 | `""` |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | 禁止 CLI 访问 `api.anthropic.com`（GFW 下必需） | `1` |
+
+### 3.8 GFW 环境网络策略
+
+在中国大陆部署时，`api.telegram.org` 被 GFW 封锁，而国内 API 镜像（如 `api.aicodemirror.com`、`api.kimi.com`）可直连。需要分层代理策略：
+
+| 组件 | 目标 | 网络策略 |
+| ---- | ---- | ---- |
+| Host — Telegram Adapter | `api.telegram.org` | 需代理（`HTTPS_PROXY` → Clash 等） |
+| Host — aiogram Session | `api.telegram.org` | `AiohttpSession(proxy=...)` + `aiohttp-socks` |
+| Container — API Proxy | 国内 API 镜像 | 直连（`--network bridge`），**不转发** `HTTPS_PROXY` |
+| Container — Proxy Sidecar | 外部搜索 | Unix Socket 白名单代理（`--network none` 模式） |
+
+> **陷阱**：Python `aiohttp` / `urllib` 不自动使用系统代理。必须显式配置。
+> 将 `HTTPS_PROXY` 转发到容器会导致国内 API 走海外代理节点，反而 `ConnectionRefused`。
+
+### 3.9 流式响应
+
+**文件**：`src/main.py`（`_StreamState`），`src/stream_debouncer.py`
+
+Agent 边生成边推送，宿主收到 `stream_chunk` 后经防抖器合并，再转发到 IM：
+
+1. 首块：`send_message()` 发送"💭 Thinking..."占位消息，拿到平台 msg_id
+2. 后续块：`edit_message(msg_id)` 覆盖更新（经 StreamDebouncer 合并）
 3. 最终块（`is_final=true`）：最后一次 edit
+4. **空响应兜底**：若 API 返回 0 字符，容器端写入 `send_message` IPC 作为兜底
 
-**防抖**：500ms 或 200 字符，取先到者，避免触达 IM 平台 API 限频。
+**防抖**：500ms 或 200 字符，取先到者，避免触达 IM 平台 API 限频。详见 §3.13。
 
 | 平台 | 流式实现 |
 | ---- | ---- |
 | Telegram | `edit_message_text()` 覆盖整条消息 |
 | 飞书 | `PATCH /im/v1/messages/:id` 更新 Interactive Card |
 
-### 3.8 网络代理（Proxy Sidecar）
+### 3.10 网络代理（Proxy Sidecar）
 
 默认 `--network none`。需 Web 搜索时通过 Unix Socket 代理受控出站。
 
@@ -305,13 +395,79 @@ Proxy Sidecar 容器 (lynxclaw-proxy, --network bridge)
 即使 Agent 被 prompt injection 劫持，也无法访问白名单外的域名。
 Unix Socket RTT P50=0.060ms / P99=0.064ms（Spike S3 实测），对代理链路性能无影响。
 
-### 3.9 可观测性
+### 3.11 可观测性
 
 **文件**：`src/observability.py`
 
 - **日志**：`structlog` JSON 格式，自动附带 correlation_id
-- **指标**（Prometheus）：消息量、容器耗时、token 消耗、活跃容器数、IPC 延迟、工具调用/拦截数
+- **指标**（Prometheus）：消息量、容器耗时、token 消耗、活跃容器数、IPC 延迟、工具调用/拦截数（共 7 个 Counter/Gauge）
 - **审计**：`tool_audit_log` 表 + `data/audit_log.jsonl` 归档
+
+### 3.12 持久容器模式
+
+**文件**：`src/persistent_container.py`
+
+Persistent 模式下容器长期运行，不随请求销毁。适用于需要保持状态的常驻 Agent。
+
+| 机制 | 说明 |
+| ---- | ---- |
+| 心跳保活 | 定期检查容器健康状态，异常时自动重启 |
+| Inbox 投递 | 新消息通过 `data/ipc/{group}/inbox/` 文件投递给运行中的容器 |
+| 生命周期 | `start()` / `stop()` / `send_prompt()` / `health_check()` |
+
+容器配置中 `container_mode: persistent` 启用，安全加固标志与 Ephemeral 模式一致。
+
+### 3.13 流式防抖器
+
+**文件**：`src/stream_debouncer.py`
+
+独立组件，负责合并高频 `stream_chunk` IPC 事件，避免触达 IM 平台 API 限频。
+
+- **刷新策略**：500ms 超时 或 200 字符累积，取先到者
+- **每 Group 独立状态**：跟踪 `chat_id`、`channel`、`msg_id`
+- **首块 → send，后续 → edit**：自动管理消息创建与更新
+
+### 3.14 Swarm 协调器
+
+**文件**：`src/swarm.py`
+
+支持跨 Group 的 Agent 间任务委派。
+
+- **IPC 方法**：`delegate_task`（容器→宿主→目标 Group 队列）
+- **权限检查**：仅允许向已配置的 Group 委派
+- **异步执行**：委派任务进入目标 Group 的消息队列，不阻塞发起方
+
+### 3.15 内存管理器
+
+**文件**：`src/memory.py`
+
+负责 Group 目录初始化和 CLAUDE.md 模板播种。
+
+- 首次启动时为每个 Group 创建目录结构（`session/`、`files/`）
+- 生成 CLAUDE.md 模板，包含 Group 名称、角色描述、可用工具说明
+- Main Group 额外获得全局内存写权限说明
+
+### 3.16 管理 CLI
+
+**文件**：`src/cli.py`
+
+提供运维管理命令行工具：
+
+| 命令 | 说明 |
+| ---- | ---- |
+| `status` | 显示系统状态（活跃容器、队列深度） |
+| `groups` | 列出所有 Group 及其配置 |
+| `tasks` | 查看/管理定时任务 |
+| `usage` | Token 用量统计 |
+| `audit` | 查看工具调用审计日志 |
+
+### 3.17 Token 预算控制
+
+宿主在 `_group_consumer()` 中执行预算检查：
+
+- 每个 Group 可配置 `token_budget`（月度上限）
+- 每次容器执行后记录 token 消耗到 `token_usage` 表
+- 超出预算时拒绝新请求，向 IM 返回提示消息
 
 ---
 
@@ -441,6 +597,15 @@ CREATE TABLE tool_audit_log (
   blocked       INTEGER DEFAULT 0,
   created_at    INTEGER NOT NULL
 );
+
+CREATE TABLE token_usage (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_name    TEXT NOT NULL,
+  input_tokens  INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  FOREIGN KEY (group_name) REFERENCES groups(name)
+);
 ```
 
 ---
@@ -459,7 +624,8 @@ CREATE TABLE tool_audit_log (
 | 日志 | `structlog` | 结构化 JSON |
 | 配置 | `pyyaml` + `python-dotenv` | YAML + .env |
 | HTTP | `fastapi` + `uvicorn` | Webhook / metrics（可选） |
-| 调度 | `croniter` + `asyncio` | cron 解析 + 异步 |
+| 定时任务 | `croniter` | Cron 表达式解析 |
+| 指标 | `prometheus-client` | Prometheus 格式指标导出 |
 
 ---
 
@@ -475,10 +641,11 @@ container:
   image: lynxclaw-agent:latest
   memory: 512m
   cpus: 1.0
-  network: none                     # none | proxy
+  network: none                     # none | bridge | proxy
   timeout: 300
   max_concurrent: 5
   lifecycle: ephemeral              # ephemeral | resumable
+  runtime: docker                   # docker | podman
 
 telegram:
   enabled: true
@@ -508,6 +675,19 @@ streaming:
 security:
   blocked_commands: ["rm -rf /", "sudo", "chmod 777", ":(){:|:&};:"]
   blocked_patterns: [".ssh", ".aws", ".gnupg", ".env", "*.pem", "*.key"]
+
+groups:                               # 频道 chat_id → Group 映射，启动时写入 DB
+  - name: main
+    channel: telegram
+    chat_id: "123456789"
+    is_main: true
+    trigger: ""                       # 空字符串 = 所有消息触发
+    token_budget: 0                   # 0 = 无限制；设置月度 token 上限
+  - name: dev-team
+    channel: feishu
+    chat_id: "oc_xxx"
+    trigger: "@bot"
+    token_budget: 500000
 ```
 
 ---
@@ -522,35 +702,47 @@ lynxclaw/
 │   ├── router.py               # 消息路由（幂等 + 背压）
 │   ├── container_manager.py    # 容器生命周期（加固 + 并发控制）
 │   ├── ipc.py                  # IPC Watcher（含流式分发）
-│   ├── db.py                   # SQLite + 迁移
-│   ├── scheduler.py            # 定时任务
+│   ├── db.py                   # SQLite + 迁移（7 表，schema v2）
+│   ├── scheduler.py            # 定时任务（croniter + 30s 轮询）
 │   ├── proxy.py                # Network Proxy Sidecar
-│   ├── observability.py        # 指标 + 日志
+│   ├── observability.py        # 指标 + 日志（structlog + Prometheus）
 │   ├── types.py                # 全局 dataclass
+│   ├── memory.py               # Group 目录播种 + CLAUDE.md 模板
+│   ├── stream_debouncer.py     # 流式防抖（500ms / 200 chars）
+│   ├── swarm.py                # 跨 Group 任务委派
+│   ├── persistent_container.py # 持久容器模式（心跳 + inbox）
+│   ├── cli.py                  # 管理 CLI（status / groups / tasks / usage / audit）
 │   ├── channels/
-│   │   ├── registry.py
-│   │   ├── telegram.py
-│   │   └── feishu.py
+│   │   ├── registry.py         # ChannelAdapter ABC + 工厂
+│   │   ├── telegram.py         # aiogram v3 + TokenBucket 限频
+│   │   ├── feishu.py           # lark-oapi WebSocket + Webhook
+│   │   └── example_adapter.py  # Echo 适配器（测试参考）
 │   └── server.py               # FastAPI（Webhook + /metrics）
 ├── container/
 │   └── agent-runner/
 │       ├── requirements.txt
-│       ├── Dockerfile
-│       ├── main.py             # Agent 入口（含 hooks）
-│       └── ipc_bridge.py       # MCP Server → IPC 文件
+│       ├── Dockerfile          # python:3.11-slim, non-root user 1000
+│       ├── main.py             # Agent 入口（含 hooks + 流式 + 持久模式）
+│       ├── ipc_bridge.py       # MCP Server → IPC 文件（原子写入）
+│       └── api_proxy.py        # 第三方 API 模型验证拦截 + 智能路径转发
 ├── groups/
-│   ├── CLAUDE.md
-│   └── {group-name}/CLAUDE.md
+│   ├── CLAUDE.md               # 全局内存（非 Main Group 只读）
+│   └── {group-name}/CLAUDE.md  # Group 专属记忆
 ├── data/
 │   ├── store/messages.db
-│   ├── ipc/{group}/
+│   ├── ipc/{group}/            # outbox/ inbox/ audit/
 │   └── audit_log.jsonl
+├── tests/                      # 381 pass, 2 skip（22 个测试文件）
+│   └── test_e2e_local.py       # E2E 测试（需 Docker + API key）
 ├── docs/
 │   ├── ARCHITECTURE.md         # 本文件
 │   ├── TASKS.md                # 开发任务清单
+│   ├── E2E-TESTING.md          # E2E 测试策略
+│   ├── DEBUG-API-MIRROR.md     # 第三方 API 镜像调试记录
 │   └── adr/                    # 架构决策记录
+├── Dockerfile                  # 宿主进程镜像（含 Docker CLI）
+├── docker-compose.yml          # 一键部署（host + agent 镜像构建）
 ├── lynxclaw.config.yaml
-├── docker-compose.yml
 ├── pyproject.toml
 └── .env.example
 ```
