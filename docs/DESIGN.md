@@ -39,7 +39,7 @@
 | 文档 | 说明 |
 | ---- | ---- |
 | [archive/TASKS-v1-mvp.md](archive/TASKS-v1-mvp.md) | MVP Phase 0–4 完整开发任务清单 |
-| [archive/notes/](archive/notes/) | 项目启动前的规划笔记与多引擎分析 |
+| `notes/`（根目录，gitignore） | 项目启动前的规划笔记与多引擎分析（私人文档，不入库） |
 | [archive/spike-data/](archive/spike-data/) | Spike 验证原始数据（S1/S2/S3 测试产物） |
 | [spike/](spike/) | Spike 技术验证报告（findings、SPIKE-REPORT） |
 
