@@ -75,3 +75,4 @@ Thumbs.db
 *.db-journal
 *.db-shm
 *.db-wal
+docs/archive/spike-data/test_socket/lat.sock
