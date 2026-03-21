@@ -71,6 +71,9 @@ def ensure_group_dirs(groups_dir: str, group_names: list[str]) -> None:
     if not global_memory.exists():
         global_memory.write_text(_GLOBAL_TEMPLATE, encoding="utf-8")
 
+    # Seed global skills directory (ADR-007)
+    (groups_path / "skills").mkdir(exist_ok=True)
+
     # Seed per-group directories and CLAUDE.md files
     for name in group_names:
         group_path = groups_path / name
@@ -79,6 +82,7 @@ def ensure_group_dirs(groups_dir: str, group_names: list[str]) -> None:
         # Optional subdirectories used by the Agent SDK / container
         (group_path / "session").mkdir(exist_ok=True)
         (group_path / "files").mkdir(exist_ok=True)
+        (group_path / "skills").mkdir(exist_ok=True)  # ADR-007
 
         group_memory = group_path / "CLAUDE.md"
         if not group_memory.exists():

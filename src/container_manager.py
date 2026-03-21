@@ -261,7 +261,15 @@ class ContainerManager:
         # none (fully isolated), but we mount the proxy volume so it can reach
         # the sidecar via HTTP_PROXY pointing at the Unix Socket.
         _use_proxy_network = cfg.network == "proxy"
-        _docker_network = "none" if _use_proxy_network else cfg.network
+        # When Credential Proxy (ADR-006) is active, the container needs bridge
+        # network to reach host.docker.internal:<port>. Otherwise, --network none.
+        _has_cred_proxy = bool(env_vars.get("ANTHROPIC_BASE_URL", "").startswith("http://host.docker.internal"))
+        if _has_cred_proxy:
+            _docker_network = "bridge"
+        elif _use_proxy_network:
+            _docker_network = "none"
+        else:
+            _docker_network = cfg.network
 
         cmd: list[str] = [
             cfg.runtime, "run", "--rm",
@@ -333,7 +341,22 @@ class ContainerManager:
             builtin_env["HTTP_PROXY"] = "http+unix:///proxy/proxy.sock"
             builtin_env["HTTPS_PROXY"] = "http+unix:///proxy/proxy.sock"
 
+        # Environment variable prefix whitelist — only vars matching these
+        # prefixes are forwarded to containers. Prevents accidental credential
+        # leakage (ADR-006).
+        _ALLOWED_ENV_PREFIXES = (
+            "ANTHROPIC_",
+            "LYNXCLAW_",
+            "CLAUDE_CODE_DISABLE_",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "IPC_BASE_DIR",
+        )
+
         for k, v in {**builtin_env, **env_vars}.items():
+            if not any(k.startswith(p) for p in _ALLOWED_ENV_PREFIXES):
+                log.warning("container.env_blocked", key=k, group=group_name)
+                continue
             cmd += ["-e", f"{k}={v}"]
 
         # Image

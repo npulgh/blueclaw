@@ -24,6 +24,16 @@ from src.types import ChannelCapabilities, IncomingMessage, OutgoingMessage
 
 logger = structlog.get_logger(__name__)
 
+# Auto-discovery constants (used by discover_adapters)
+CHANNEL_NAME = "telegram"
+
+
+def create_adapter(config) -> "Optional[ChannelAdapter]":
+    """Factory for auto-discovery. Returns None if Telegram is not enabled."""
+    if not config.telegram.enabled:
+        return None
+    return TelegramAdapter()
+
 
 # ---------------------------------------------------------------------------
 # Token bucket rate limiter

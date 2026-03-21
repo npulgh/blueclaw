@@ -340,22 +340,26 @@ async def _group_consumer(
             mounts["global_memory"] = get_global_memory_path(os.path.join(cwd, "groups"))
 
         env_vars = {
-            "ANTHROPIC_API_KEY": config.anthropic_api_key,
             "LYNXCLAW_CHAT_ID": msg.chat_id,
         }
-        # Forward ANTHROPIC_BASE_URL if set, so the agent runner can start its
-        # proxy against the correct upstream (e.g. a third-party Anthropic-compatible API).
-        base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
-        if base_url:
-            env_vars["ANTHROPIC_BASE_URL"] = base_url
-
-        # Forward ANTHROPIC_AUTH_TOKEN (must be "" for some mirrors like REDACTED)
-        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
-        if auth_token is not None:
-            env_vars["ANTHROPIC_AUTH_TOKEN"] = auth_token
+        # Credential Proxy (ADR-006): API key injected by host-side proxy,
+        # container never sees the real key.
+        if hasattr(config, '_credential_proxy') and config._credential_proxy:
+            env_vars["ANTHROPIC_BASE_URL"] = config._credential_proxy.base_url_for_container
+        else:
+            # Fallback: direct key (for testing or when proxy is disabled)
+            env_vars["ANTHROPIC_API_KEY"] = config.anthropic_api_key
+            base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+            if base_url:
+                env_vars["ANTHROPIC_BASE_URL"] = base_url
+            # Forward ANTHROPIC_AUTH_TOKEN (must be "" for some mirrors like REDACTED)
+            auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+            if auth_token is not None:
+                env_vars["ANTHROPIC_AUTH_TOKEN"] = auth_token
 
         # Disable non-essential traffic (tool_search, MCP config fetches to api.anthropic.com)
         # which can hang or error when using third-party API mirrors behind GFW.
+        base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
         if base_url and "anthropic.com" not in base_url:
             env_vars["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 
@@ -449,6 +453,7 @@ async def _group_consumer(
                 "consumer.nonzero_exit",
                 group=group_name,
                 exit_code=result.exit_code,
+                stdout=result.stdout[:2000],
                 stderr=result.stderr[:2000],
             )
             await db.update_message_status(
@@ -579,6 +584,23 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     proxy_sidecar.init(config.proxy, runtime=config.container.runtime)
     if config.proxy.enabled:
         await proxy_sidecar.start()
+
+    # --- Credential Proxy (ADR-006): API key never enters containers ---
+    # Disabled by default on Windows (Docker Desktop WSL2 can't reach host ports).
+    # Enable via LYNXCLAW_CREDENTIAL_PROXY=1 when Docker networking supports
+    # host.docker.internal (Linux, macOS, or Docker Desktop with host networking).
+    _cred_proxy_enabled = os.environ.get("LYNXCLAW_CREDENTIAL_PROXY", "0") == "1"
+    cred_proxy = None
+    if _cred_proxy_enabled:
+        from src.credential_proxy import CredentialProxy
+        upstream = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        cred_proxy = CredentialProxy(
+            upstream=upstream,
+            api_key=config.anthropic_api_key,
+            auth_token=os.environ.get("ANTHROPIC_AUTH_TOKEN", ""),
+        )
+        cred_proxy.start()
+    config._credential_proxy = cred_proxy  # type: ignore[attr-defined]
 
     stream = _StreamState()
 
@@ -729,6 +751,8 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     await scheduler.stop()
     if proxy_sidecar.is_running:
         await proxy_sidecar.stop()
+    if cred_proxy:
+        cred_proxy.stop()
     if webhook_server is not None:
         await webhook_server.stop()
     await debouncer.stop()
