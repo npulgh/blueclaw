@@ -244,3 +244,59 @@ def test_security_defaults(tmp_path, monkeypatch):
 
     assert "sudo" in cfg.security.blocked_commands
     assert ".ssh" in cfg.security.blocked_patterns
+
+
+# ---------------------------------------------------------------------------
+# Test: external security config
+# ---------------------------------------------------------------------------
+
+def test_security_config_from_external_file(tmp_path, monkeypatch):
+    """Security config loaded from external file when present."""
+    yaml_file = _write_yaml(tmp_path, MINIMAL_YAML)
+    env_file = _write_env(tmp_path, "ANTHROPIC_API_KEY=sk-test-key\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    sec_dir = tmp_path / "config_home" / "lynxclaw"
+    sec_dir.mkdir(parents=True)
+    sec_file = sec_dir / "security.yaml"
+    sec_file.write_text(
+        "blocked_patterns:\n  - '*.pem'\n  - '*.key'\n  - '.secret'\n",
+        encoding="utf-8",
+    )
+
+    cfg = load_config(yaml_file, dotenv_path=env_file, security_config_path=str(sec_file))
+    assert "*.pem" in cfg.security.blocked_patterns
+    assert ".secret" in cfg.security.blocked_patterns
+
+
+def test_security_config_fallback_to_inline(tmp_path, monkeypatch):
+    """When external security config is absent, fall back to inline config."""
+    yaml_content = """\
+    host:
+      log_level: info
+    telegram:
+      enabled: false
+    feishu:
+      enabled: false
+    security:
+      blocked_patterns:
+        - '*.env'
+    """
+    yaml_file = _write_yaml(tmp_path, yaml_content)
+    env_file = _write_env(tmp_path, "ANTHROPIC_API_KEY=sk-test-key\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    cfg = load_config(yaml_file, dotenv_path=env_file, security_config_path="/nonexistent/path")
+    assert "*.env" in cfg.security.blocked_patterns
+
+
+def test_security_config_defaults_when_both_absent(tmp_path, monkeypatch):
+    """When neither external nor inline security config exists, use hardcoded defaults."""
+    yaml_file = _write_yaml(tmp_path, MINIMAL_YAML)
+    env_file = _write_env(tmp_path, "ANTHROPIC_API_KEY=sk-test-key\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    cfg = load_config(yaml_file, dotenv_path=env_file, security_config_path="/nonexistent/path")
+    # Hardcoded defaults from SecurityConfig dataclass
+    assert ".ssh" in cfg.security.blocked_patterns
+    assert "sudo" in cfg.security.blocked_commands

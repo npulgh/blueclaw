@@ -134,12 +134,20 @@ def _load_yaml(path: str | Path) -> dict:
     return data
 
 
-def load_config(yaml_path: str | Path = "lynxclaw.config.yaml", *, dotenv_path: str | Path | None = ".env") -> Config:
+def load_config(
+    yaml_path: str | Path = "lynxclaw.config.yaml",
+    *,
+    dotenv_path: str | Path | None = ".env",
+    security_config_path: str | Path | None = None,
+) -> Config:
     """Load config from YAML file + .env, apply env var overrides, validate.
 
     Args:
         yaml_path: Path to the YAML config file.
         dotenv_path: Path to .env file (None to skip). Defaults to ".env".
+        security_config_path: Path to external security config YAML. When present
+            and the file exists, its contents override the inline security section.
+            Defaults to ``~/.config/lynxclaw/security.yaml``.
 
     Returns:
         Populated Config dataclass.
@@ -174,6 +182,16 @@ def load_config(yaml_path: str | Path = "lynxclaw.config.yaml", *, dotenv_path: 
     for section_name, section_obj in section_map.items():
         if section_name in raw and isinstance(raw[section_name], dict):
             _merge_section(section_obj, raw[section_name])
+
+    # 3b. External security config (overrides inline security section)
+    _sec_path = security_config_path
+    if _sec_path is None:
+        _sec_path = Path.home() / ".config" / "lynxclaw" / "security.yaml"
+    try:
+        sec_raw = _load_yaml(_sec_path)
+        _merge_section(cfg.security, sec_raw)
+    except (FileNotFoundError, ConfigError):
+        pass  # fallback to inline or defaults
 
     # Parse groups list
     groups_raw = raw.get("groups")
