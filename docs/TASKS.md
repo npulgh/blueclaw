@@ -2,6 +2,7 @@
 
 > MVP 已完成（2026-03-19）。Phase 0–4 全部实现，381 测试通过。
 > Phase 5 已完成（2026-03-21）。402 测试通过，手动 E2E 验证通过。
+> Phase 6 已完成（2026-03-21）。417 测试通过（新增 15 个）。
 >
 > 关联文档：
 > - [ARCHITECTURE.md](ARCHITECTURE.md) — 系统架构
@@ -155,12 +156,46 @@
 
 ---
 
+## Phase 6：Web Dashboard（已完成 ✅ 2026-03-21）
+
+> 设计文档：[docs/superpowers/specs/2026-03-21-web-dashboard-design.md](superpowers/specs/2026-03-21-web-dashboard-design.md)
+> 实现计划：[docs/superpowers/plans/2026-03-21-web-dashboard.md](superpowers/plans/2026-03-21-web-dashboard.md)
+> 417 测试通过（新增 15 个）
+
+| # | 任务 | 文件 | 状态 |
+| ---- | ---- | ---- | ---- |
+| 6.1 | DashboardConfig dataclass | `src/config.py` | ✅ |
+| 6.2 | DB 扩展：offset 参数 + `get_messages_count_since()` | `src/db.py` | ✅ |
+| 6.3 | Bearer Token 认证依赖 | `src/dashboard/auth.py` | ✅ |
+| 6.4 | 7 个只读 API 端点（`/api/*`） | `src/dashboard/api.py` | ✅ |
+| 6.5 | `WebhookServer` 集成：`set_db/set_config` + StaticFiles | `src/server.py` | ✅ |
+| 6.6 | `main.py` 条件启动 Dashboard | `src/main.py` | ✅ |
+| 6.7 | SPA 前端（Alpine.js + Tailwind CDN） | `src/dashboard/static/` | ✅ |
+| 6.8 | 测试：认证 + API 端点 | `tests/test_dashboard_*.py` | ✅ 12 tests |
+
+**启用方式**：
+
+```yaml
+# lynxclaw.config.yaml
+dashboard:
+  enabled: true
+```
+
+```bash
+# .env
+LYNXCLAW_DASHBOARD_TOKEN=your-secret-token
+```
+
+访问 `http://localhost:8080`，输入 Token 登录。
+
+---
+
 ## 后续开发方向（待规划）
 
 > 以下为潜在扩展方向，尚未立项。开始前需先写 ADR 或更新 ARCHITECTURE.md。
 
 - **更多 IM 渠道**：Discord、Slack、微信（参考 [channel-development.md](channel-development.md)）
-- **Web Dashboard**：可视化 Group 管理、任务调度、审计日志
+- ~~**Web Dashboard**：可视化 Group 管理、任务调度、审计日志~~ → ✅ **已完成（Phase 6，2026-03-21）**
 - **Agent 市场**：预置 Agent 模板（代码助手、文档助手等）
 - **多模型支持**：在 `run_agent()` 抽象层接入非 Claude 模型
 - **Docker Sandbox / DinD 双层隔离**：高安全场景可选的 hypervisor 级隔离（参考 NanoClaw）
