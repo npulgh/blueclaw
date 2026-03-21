@@ -108,38 +108,52 @@ class ChannelRegistry:
 # ---------------------------------------------------------------------------
 
 def discover_adapters(config: "Config") -> dict[str, "ChannelAdapter"]:
-    """Instantiate and return all adapters that are enabled in *config*.
+    """Auto-discover adapters by scanning channel modules for create_adapter().
 
-    Returns a dict of ``{channel_name: uninitialised_adapter}``.  The caller
-    is responsible for calling ``adapter.init(channel_config)`` on each entry
-    before registering it with a ``ChannelRegistry``.
+    Each adapter module can define:
+    - ``CHANNEL_NAME: str`` — the registry key (falls back to module name)
+    - ``create_adapter(config) -> Optional[ChannelAdapter]`` — factory function
+
+    Modules without ``create_adapter`` are silently skipped. Factories that
+    return ``None`` (disabled/missing credentials) are also skipped.
 
     Adding a new adapter requires only:
     1. Creating the adapter class in ``src/channels/<name>.py``.
-    2. Adding a config section to ``src/config.py``.
-    3. Adding one ``if config.<name>.enabled`` block below.
+    2. Adding ``CHANNEL_NAME`` and ``create_adapter()`` to the module.
+    3. Adding a config section to ``src/config.py``.
 
     No other files need to change.
     """
-    # Import here to avoid circular imports at module load time.
-    from src.channels.feishu import FeishuAdapter
-    from src.channels.telegram import TelegramAdapter
+    import importlib
+    import pkgutil
+
+    import src.channels as channels_pkg
 
     adapters: dict[str, ChannelAdapter] = {}
 
-    if config.telegram.enabled:
-        adapters["telegram"] = TelegramAdapter()
-        logger.debug("discover_adapters: telegram enabled")
+    for _importer, modname, _ispkg in pkgutil.iter_modules(channels_pkg.__path__):
+        if modname in ("registry", "__init__", "example_adapter"):
+            continue
+        try:
+            mod = importlib.import_module(f"src.channels.{modname}")
+        except ImportError as exc:
+            logger.warning("discover_adapters: failed to import %s: %s", modname, exc)
+            continue
 
-    if config.feishu.enabled:
-        adapters["feishu"] = FeishuAdapter()
-        logger.debug("discover_adapters: feishu enabled")
+        factory = getattr(mod, "create_adapter", None)
+        if factory is None:
+            continue
 
-    # To add a new channel (e.g. Discord), append:
-    #
-    #   if config.discord.enabled:
-    #       from src.channels.discord import DiscordAdapter
-    #       adapters["discord"] = DiscordAdapter()
+        name = getattr(mod, "CHANNEL_NAME", modname)
+        try:
+            adapter = factory(config)
+        except Exception as exc:
+            logger.warning("discover_adapters: %s.create_adapter() failed: %s", name, exc)
+            continue
+
+        if adapter is not None:
+            adapters[name] = adapter
+            logger.debug("discover_adapters: %s enabled", name)
 
     logger.info("discover_adapters: found %d adapter(s): %s", len(adapters), list(adapters))
     return adapters
