@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import structlog
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 if TYPE_CHECKING:
     from src.channels.feishu import FeishuAdapter
@@ -47,10 +49,32 @@ class WebhookServer:
         self._serve_task: Optional[asyncio.Task] = None
         self._telegram_adapter: Optional["TelegramAdapter"] = None
         self._feishu_adapter: Optional["FeishuAdapter"] = None
+        self._db: Any = None
+        self._config: Any = None
 
         # Register built-in routes
         self.app.add_api_route("/health", self._health, methods=["GET"])
         self.app.add_api_route("/metrics", self._metrics_redirect, methods=["GET"])
+
+        # Dashboard API router — registered here so it precedes StaticFiles mount.
+        # IMPORTANT: StaticFiles at "/" is a catch-all; it must be mounted last
+        # (in start()), after all webhook routes are registered via setup_*().
+        from src.dashboard.api import router as _dash_router
+        self.app.include_router(_dash_router)
+
+        # Startup event: inject shared state into app.state
+        @self.app.on_event("startup")
+        async def _startup() -> None:
+            self.app.state.db = self._db
+            self.app.state.config = self._config
+
+    def set_db(self, db: Any) -> None:
+        """Inject the shared Database instance before start()."""
+        self._db = db
+
+    def set_config(self, config: Any) -> None:
+        """Inject the loaded Config before start()."""
+        self._config = config
 
     def setup_telegram(self, telegram_adapter: "TelegramAdapter") -> None:
         """Register Telegram webhook endpoint at /webhook/telegram."""
@@ -74,6 +98,13 @@ class WebhookServer:
 
     async def start(self, host: str = "0.0.0.0", port: int = 8080) -> None:
         """Start uvicorn server in a background asyncio task."""
+        # Mount StaticFiles last — it's a "/" catch-all and must come after
+        # all webhook routes registered via setup_telegram/setup_feishu().
+        _static_dir = Path(__file__).parent / "dashboard" / "static"
+        if _static_dir.exists():
+            self.app.mount(
+                "/", StaticFiles(directory=str(_static_dir), html=True), name="static"
+            )
         config = uvicorn.Config(
             app=self.app,
             host=host,
