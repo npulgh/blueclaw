@@ -100,6 +100,11 @@ class SecurityConfig:
 
 
 @dataclass
+class DashboardConfig:
+    enabled: bool = False
+
+
+@dataclass
 class Config:
     # Credentials (from env, not YAML)
     anthropic_api_key: str = ""
@@ -113,6 +118,7 @@ class Config:
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     groups: list[GroupConfig] = field(default_factory=list)
 
 
@@ -179,6 +185,7 @@ def load_config(
         "proxy": cfg.proxy,
         "streaming": cfg.streaming,
         "security": cfg.security,
+        "dashboard": cfg.dashboard,
     }
     for section_name, section_obj in section_map.items():
         if section_name in raw and isinstance(raw[section_name], dict):
