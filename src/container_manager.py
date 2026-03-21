@@ -261,7 +261,15 @@ class ContainerManager:
         # none (fully isolated), but we mount the proxy volume so it can reach
         # the sidecar via HTTP_PROXY pointing at the Unix Socket.
         _use_proxy_network = cfg.network == "proxy"
-        _docker_network = "none" if _use_proxy_network else cfg.network
+        # When Credential Proxy (ADR-006) is active, the container needs bridge
+        # network to reach host.docker.internal:<port>. Otherwise, --network none.
+        _has_cred_proxy = bool(env_vars.get("ANTHROPIC_BASE_URL", "").startswith("http://host.docker.internal"))
+        if _has_cred_proxy:
+            _docker_network = "bridge"
+        elif _use_proxy_network:
+            _docker_network = "none"
+        else:
+            _docker_network = cfg.network
 
         cmd: list[str] = [
             cfg.runtime, "run", "--rm",
