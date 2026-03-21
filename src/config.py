@@ -71,6 +71,7 @@ class GroupConfig:
     trigger: str = "@bot"
     token_budget: int = 0  # 0 = unlimited; otherwise max tokens per calendar month
     container_mode: str = "ephemeral"  # "ephemeral" or "persistent"
+    allowed_senders: list[str] = field(default_factory=list)  # empty = no restriction
 
 
 @dataclass
@@ -205,6 +206,7 @@ def load_config(
                 trigger=g.get("trigger", cfg.router.default_trigger),
                 token_budget=int(g.get("token_budget", 0)),
                 container_mode=g.get("container_mode", "ephemeral"),
+                allowed_senders=g.get("allowed_senders", []),
             )
             for g in groups_raw
             if isinstance(g, dict) and "name" in g and "channel" in g and "chat_id" in g

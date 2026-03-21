@@ -28,6 +28,7 @@ class RouteResult(Enum):
     DUPLICATE = auto()    # Already seen — idempotency guard triggered
     NO_GROUP = auto()     # No group registered for this channel+chat_id
     NO_TRIGGER = auto()   # Group chat message didn't start with trigger prefix
+    DENIED = auto()       # Sender not in allowed_senders list
     BACKPRESSURE = auto() # Group queue is full — caller should retry later
 
 
@@ -135,7 +136,20 @@ class MessageRouter:
                 )
                 return RouteResult.NO_TRIGGER
 
-        # 4. Backpressure — try to enqueue without blocking
+        # 4. Sender allowlist — empty list means no restriction
+        group_cfg = next(
+            (g for g in self._config.groups if g.name == group_name), None
+        )
+        if group_cfg and group_cfg.allowed_senders:
+            if msg.sender_id not in group_cfg.allowed_senders:
+                log.warning(
+                    "router.denied",
+                    group=group_name,
+                    sender_id=msg.sender_id,
+                )
+                return RouteResult.DENIED
+
+        # 5. Backpressure — try to enqueue without blocking
         queue = self._get_or_create_queue(group_name)
         try:
             queue.put_nowait(msg)
