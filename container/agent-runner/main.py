@@ -116,10 +116,11 @@ async def run_agent(
         max_turns=30,
         hooks=hooks,
         system_prompt=(
-            "You are a helpful assistant in a group chat. "
-            "Reply directly to the user's message in the same language they used. "
-            "Do NOT repeat or rephrase the user's question before answering. "
-            "Do NOT include internal reasoning, meta-commentary, or instructions in your reply."
+            "You are a helpful assistant. "
+            "Reply directly in the same language the user used. "
+            "NEVER repeat, rephrase, or quote the user's question. "
+            "NEVER include phrases like 'The user asked', 'Please provide', or any meta-commentary. "
+            "Just answer the question directly."
         ),
     )
     if session_id:
