@@ -300,3 +300,22 @@ def test_security_config_defaults_when_both_absent(tmp_path, monkeypatch):
     # Hardcoded defaults from SecurityConfig dataclass
     assert ".ssh" in cfg.security.blocked_patterns
     assert "sudo" in cfg.security.blocked_commands
+
+
+# ---------------------------------------------------------------------------
+# DashboardConfig
+# ---------------------------------------------------------------------------
+
+def test_dashboard_defaults():
+    from src.config import DashboardConfig
+    cfg = DashboardConfig()
+    assert cfg.enabled is False
+
+
+def test_dashboard_config_loaded(tmp_path):
+    from src.config import load_config
+    cfg_file = tmp_path / "cfg.yaml"
+    cfg_file.write_text("dashboard:\n  enabled: true\n")
+    import os; os.environ["ANTHROPIC_API_KEY"] = "test"
+    cfg = load_config(cfg_file, dotenv_path=None)
+    assert cfg.dashboard.enabled is True
