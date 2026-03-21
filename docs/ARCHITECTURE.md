@@ -755,36 +755,36 @@ lynxclaw/
 > 分析时间：2026-03-21。
 > 原则：只借鉴 Lynxclaw 缺失且收益明确的设计，不照搬。
 
-### 10.1 Credential Proxy——凭证永不入容器（P0）
+### 10.1 Credential Proxy——凭证永不入容器（P0）✅
 
 **现状问题**：`ANTHROPIC_API_KEY` 通过 `-e` 直接注入容器环境变量。容器运行期间，Agent 可通过 `env` 或 `/proc/self/environ` 读取明文 key。虽然容器是临时的（`--rm`），但 prompt injection 攻击窗口存在。
 
 **NanoClaw 方案**：宿主运行 HTTP Credential Proxy，容器只收到 `ANTHROPIC_BASE_URL=http://host:port` + placeholder key。Proxy 拦截请求，注入真实 Authorization header，转发到上游。
 
-**Lynxclaw 融入设计**：
+**实际实现**（2026-03-21）：
 
 ```text
 容器内 Agent
-  └─ ANTHROPIC_BASE_URL=http://127.0.0.1:9099  (容器内 api_proxy)
-       └─ 转发到 http://proxy-sidecar:3001      (宿主侧 credential proxy)
-            └─ 注入 ANTHROPIC_API_KEY
-            └─ 转发到真实 upstream (api.anthropic.com 或第三方镜像)
+  └─ ANTHROPIC_BASE_URL=http://host.docker.internal:3001  (宿主侧 credential proxy)
+       └─ 注入 x-api-key + anthropic-auth-token
+       └─ 转发到真实 upstream (api.anthropic.com 或第三方镜像)
 ```
 
-- 复用现有 Proxy Sidecar 架构（`src/proxy.py`），扩展其职责
-- 容器内 `api_proxy.py` 的模型验证拦截功能保持不变
-- 容器环境变量中不再包含 `ANTHROPIC_API_KEY`
-- 需新增 ADR-006 记录此决策
+- 独立模块 `src/credential_proxy.py`（不复用 Proxy Sidecar，职责更清晰）
+- 容器网络从 `none` 切换为 `bridge`（需要访问 host）
+- 环境变量白名单 `_ALLOWED_ENV_PREFIXES` 阻止未授权变量泄露
+- **默认关闭**（`LYNXCLAW_CREDENTIAL_PROXY=0`），因 Docker Desktop (Windows/WSL2) 网络拓扑不支持 `host.docker.internal`
+- Linux 原生 Docker 可通过 `LYNXCLAW_CREDENTIAL_PROXY=1` 启用
 
-**影响范围**：`src/proxy.py`、`src/container_manager.py`、`container/agent-runner/api_proxy.py`
+**影响范围**：`src/credential_proxy.py`（新）、`src/container_manager.py`、`src/main.py`、`container/agent-runner/main.py`
 
-### 10.2 Skills 扩展系统——无代码扩展 Agent 能力（P0）
+### 10.2 Skills 扩展系统——无代码扩展 Agent 能力（P0）✅
 
 **现状问题**：Agent 能力完全由 `container/agent-runner/main.py` + hooks 决定。用户无法在不改代码的情况下扩展 Agent 行为（如添加领域知识、自定义工具使用规则）。
 
 **NanoClaw 方案**：`.claude/skills/{skill-name}/SKILL.md` 文件系统，Agent 启动时自动加载。
 
-**Lynxclaw 融入设计**：
+**实际实现**（2026-03-21）：
 
 ```text
 groups/
@@ -802,9 +802,9 @@ groups/
 - 技能文件为纯 Markdown，描述 Agent 的额外能力、工具使用规则、领域知识
 - 挂载方式：`groups/skills/` → `/workspace/global/skills/:ro`（已被 global_dir 覆盖）
 
-**影响范围**：`container/agent-runner/main.py`、`src/memory.py`、`src/container_manager.py`
+**影响范围**：`container/agent-runner/main.py`（`load_skills` + `_inject_skills`）、`src/memory.py`（目录播种）
 
-### 10.3 安全配置外置（P1）
+### 10.3 安全配置外置（P1）✅
 
 **现状问题**：`blocked_patterns` 和 `blocked_commands` 存在 `lynxclaw.config.yaml` 中（项目根目录），安全策略与业务配置混合。
 
@@ -819,7 +819,7 @@ groups/
 
 **影响范围**：`src/config.py`、`src/container_manager.py`
 
-### 10.4 环境变量白名单（P1）
+### 10.4 环境变量白名单（P1）✅
 
 **现状问题**：`_build_command()` 中 `env_vars` 由调用方决定传什么，ContainerManager 层面无过滤。
 
@@ -833,7 +833,7 @@ _ALLOWED_ENV_PREFIXES = {"ANTHROPIC_", "LYNXCLAW_", "CLAUDE_CODE_DISABLE_"}
 
 **影响范围**：`src/container_manager.py`
 
-### 10.5 Channel 自注册（P2）
+### 10.5 Channel 自注册（P2）✅
 
 **现状问题**：`discover_adapters()` 工厂函数中每个 Channel 需手动添加 `if config.xxx.enabled` 分支。
 
@@ -849,7 +849,7 @@ _ALLOWED_ENV_PREFIXES = {"ANTHROPIC_", "LYNXCLAW_", "CLAUDE_CODE_DISABLE_"}
 
 **影响范围**：`src/channels/registry.py`、各 adapter 模块
 
-### 10.6 Sender Allowlist——消息预过滤（P2）
+### 10.6 Sender Allowlist——消息预过滤（P2）✅
 
 **NanoClaw 方案**：`src/sender-allowlist.ts` 在消息进入路由前过滤，减少无效容器启动。
 

@@ -1,6 +1,7 @@
 # Lynxclaw — 任务清单
 
 > MVP 已完成（2026-03-19）。Phase 0–4 全部实现，381 测试通过。
+> Phase 5 已完成（2026-03-21）。402 测试通过，手动 E2E 验证通过。
 >
 > 关联文档：
 > - [ARCHITECTURE.md](ARCHITECTURE.md) — 系统架构
@@ -22,6 +23,8 @@
 | 默认 Ephemeral + 可选 Resumable + 可选 Persistent | [ADR-005](adr/005-resumable-containers.md) |
 | 容器加固参数（cap-drop ALL 等）不可删减 | [ARCHITECTURE.md §3.4](ARCHITECTURE.md) |
 | 数据库使用 SQLite（不换 PostgreSQL 等） | 设计哲学——零部署依赖 |
+| Credential Proxy 默认关闭，opt-in 启用（Windows 网络限制） | [ADR-006](adr/006-credential-proxy.md) |
+| Skills 通过 Markdown 注入 system prompt | [ADR-007](adr/007-skills-system.md) |
 
 ---
 
@@ -39,9 +42,10 @@
 
 ---
 
-## Phase 5：架构升级（NanoClaw 借鉴）
+## Phase 5：架构升级（已完成 ✅ 2026-03-21）
 
 > 来源：NanoClaw 架构分析（2026-03-21）。详见 [ARCHITECTURE.md §十](ARCHITECTURE.md)。
+> 分支: `feature-phase6` | 402 测试通过 | 手动 E2E 验证通过
 > 原则：只引入 Lynxclaw 缺失且收益明确的设计，不照搬。
 
 ### 5.0 前置：ADR 编写
@@ -121,6 +125,21 @@
 5.1.* 和 5.2.* 互不依赖，可并行
 5.4.* 和 5.5.* 独立，可随时实施
 ```
+
+### Phase 5 已知限制
+
+| 限制 | 影响 | 解决方案 |
+| ---- | ---- | -------- |
+| Credential Proxy 在 Docker Desktop (Windows/WSL2) 不可用 | 容器无法通过 `host.docker.internal` 访问 host | 默认关闭，`LYNXCLAW_CREDENTIAL_PROXY=1` opt-in |
+| Agent system_prompt 硬编码在 `run_agent()` | 无法通过配置文件自定义 | 后续可从 CLAUDE.md 或 Skills 注入 |
+
+### Phase 5 实战经验
+
+详见 [ADR-005 §Phase 5 实战经验](adr/ADR-005-container-hardening-lessons.md)。核心教训：
+
+1. **Docker 网络拓扑因平台而异** — 设计容器→host 通信时必须考虑 Linux/macOS/Windows 三种 Docker 后端的差异，提供 fallback
+2. **新运行模式必须审查所有 `sys.exit`** — 引入 Credential Proxy 模式后，容器内 `missing ANTHROPIC_API_KEY` 检查变成了误杀
+3. **Agent 必须有 system prompt** — 没有 system prompt 的 LLM agent 输出不可预测，内部推理会泄露到用户回复
 
 ---
 
