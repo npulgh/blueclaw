@@ -1,0 +1,12 @@
+/* Lynxclaw Dashboard — custom overrides (Tailwind handles the rest) */
+
+/* Smooth scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #111827; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+
+/* Table cells don't wrap by default */
+td, th { white-space: nowrap; }
+
+/* Content cells (message text, summaries) may wrap */
+td.content-cell { white-space: normal; word-break: break-word; max-width: 300px; }
