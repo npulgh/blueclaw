@@ -650,20 +650,24 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     if recovered:
         log.info("startup.recovery", recovered=recovered)
 
-    # --- Webhook server (started if any adapter uses webhook mode) ---
+    # --- Webhook / Dashboard server ---
     webhook_server: Optional[WebhookServer] = None
     needs_webhook = (
         (config.telegram.enabled and config.telegram.mode == "webhook") or
         (config.feishu.enabled and config.feishu.mode == "webhook")
     )
-    if needs_webhook:
+    needs_dashboard = config.dashboard.enabled
+    if needs_webhook or needs_dashboard:
         webhook_server = WebhookServer()
-        if config.telegram.enabled and config.telegram.mode == "webhook":
-            tg_adapter = registry.get("telegram")
-            webhook_server.setup_telegram(tg_adapter)
-        if config.feishu.enabled and config.feishu.mode == "webhook":
-            feishu_adapter = registry.get("feishu")
-            webhook_server.setup_feishu(feishu_adapter)
+        webhook_server.set_db(db)
+        webhook_server.set_config(config)
+        if needs_webhook:
+            if config.telegram.enabled and config.telegram.mode == "webhook":
+                tg_adapter = registry.get("telegram")
+                webhook_server.setup_telegram(tg_adapter)
+            if config.feishu.enabled and config.feishu.mode == "webhook":
+                feishu_adapter = registry.get("feishu")
+                webhook_server.setup_feishu(feishu_adapter)
         webhook_host = getattr(config.host, "webhook_host", "0.0.0.0")
         webhook_port = getattr(config.host, "webhook_port", 8080)
         await webhook_server.start(host=webhook_host, port=webhook_port)
