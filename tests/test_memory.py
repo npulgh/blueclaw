@@ -40,6 +40,15 @@ def test_ensure_group_dirs_creates_session_and_files_subdirs(tmp_path: Path) -> 
     assert (Path(groups_dir) / "main" / "files").is_dir()
 
 
+def test_ensure_group_dirs_creates_skills_dirs(tmp_path: Path) -> None:
+    """skills/ directories are created for global and each group (ADR-007)."""
+    groups_dir = str(tmp_path / "groups")
+    ensure_group_dirs(groups_dir, ["main", "support"])
+    assert (Path(groups_dir) / "skills").is_dir()
+    assert (Path(groups_dir) / "main" / "skills").is_dir()
+    assert (Path(groups_dir) / "support" / "skills").is_dir()
+
+
 # ---------------------------------------------------------------------------
 # CLAUDE.md template seeding
 # ---------------------------------------------------------------------------
