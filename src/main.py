@@ -453,6 +453,7 @@ async def _group_consumer(
                 "consumer.nonzero_exit",
                 group=group_name,
                 exit_code=result.exit_code,
+                stdout=result.stdout[:2000],
                 stderr=result.stderr[:2000],
             )
             await db.update_message_status(
@@ -585,14 +586,20 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
         await proxy_sidecar.start()
 
     # --- Credential Proxy (ADR-006): API key never enters containers ---
-    from src.credential_proxy import CredentialProxy
-    upstream = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-    cred_proxy = CredentialProxy(
-        upstream=upstream,
-        api_key=config.anthropic_api_key,
-        auth_token=os.environ.get("ANTHROPIC_AUTH_TOKEN", ""),
-    )
-    cred_proxy.start()
+    # Disabled by default on Windows (Docker Desktop WSL2 can't reach host ports).
+    # Enable via LYNXCLAW_CREDENTIAL_PROXY=1 when Docker networking supports
+    # host.docker.internal (Linux, macOS, or Docker Desktop with host networking).
+    _cred_proxy_enabled = os.environ.get("LYNXCLAW_CREDENTIAL_PROXY", "0") == "1"
+    cred_proxy = None
+    if _cred_proxy_enabled:
+        from src.credential_proxy import CredentialProxy
+        upstream = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        cred_proxy = CredentialProxy(
+            upstream=upstream,
+            api_key=config.anthropic_api_key,
+            auth_token=os.environ.get("ANTHROPIC_AUTH_TOKEN", ""),
+        )
+        cred_proxy.start()
     config._credential_proxy = cred_proxy  # type: ignore[attr-defined]
 
     stream = _StreamState()
@@ -744,7 +751,8 @@ async def main(config_path: str = "lynxclaw.config.yaml") -> None:
     await scheduler.stop()
     if proxy_sidecar.is_running:
         await proxy_sidecar.stop()
-    cred_proxy.stop()
+    if cred_proxy:
+        cred_proxy.stop()
     if webhook_server is not None:
         await webhook_server.stop()
     await debouncer.stop()

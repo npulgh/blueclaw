@@ -276,8 +276,13 @@ async def main() -> None:
     audit_dir = Path(ipc_base) / group / "audit"
 
     if not api_key:
-        log.error("missing ANTHROPIC_API_KEY")
-        sys.exit(1)
+        # Credential Proxy mode (ADR-006): no real key in container.
+        # SDK still needs a non-empty value; use placeholder.
+        if os.environ.get("ANTHROPIC_BASE_URL"):
+            api_key = "sk-placeholder-credential-proxy"
+        else:
+            log.error("missing ANTHROPIC_API_KEY")
+            sys.exit(1)
     if not prompt:
         log.error("missing LYNXCLAW_PROMPT")
         sys.exit(1)
@@ -412,8 +417,11 @@ async def persistent_loop(group: str, ipc_base: str) -> None:
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        log.error("missing ANTHROPIC_API_KEY")
-        sys.exit(1)
+        if os.environ.get("ANTHROPIC_BASE_URL"):
+            api_key = "sk-placeholder-credential-proxy"
+        else:
+            log.error("missing ANTHROPIC_API_KEY")
+            sys.exit(1)
 
     inbox_dir = Path(ipc_base) / group / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
