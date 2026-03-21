@@ -303,3 +303,52 @@ async def test_get_token_usage_unknown_group_returns_zero(db: Database):
     result = await db.get_token_usage(group_name="no-such-group")
     assert result["input_tokens"] == 0
     assert result["output_tokens"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Dashboard: offset param + get_messages_count_since
+# ---------------------------------------------------------------------------
+
+async def test_get_messages_offset(db: Database):
+    """offset parameter skips rows correctly."""
+    import time as _time
+    for i in range(5):
+        await db.insert_message(
+            channel="telegram", chat_id="c1", message_id=f"offset_m{i}",
+            sender_id="u1", content=f"msg{i}", direction="inbound",
+        )
+    all_msgs = await db.get_messages(limit=10, offset=0)
+    offset_msgs = await db.get_messages(limit=10, offset=2)
+    assert len(offset_msgs) == len(all_msgs) - 2
+
+
+async def test_get_audit_log_offset(db: Database):
+    """offset parameter skips audit rows correctly."""
+    import time as _time
+    for i in range(4):
+        await db._conn.execute(
+            "INSERT INTO tool_audit_log (group_name, tool_name, created_at) VALUES (?,?,?)",
+            ("g1", f"tool{i}", int(_time.time()) + i),
+        )
+    await db._conn.commit()
+    all_rows = await db.get_audit_log(limit=10, offset=0)
+    offset_rows = await db.get_audit_log(limit=10, offset=2)
+    assert len(offset_rows) == len(all_rows) - 2
+
+
+async def test_get_messages_count_since(db: Database):
+    """Count messages created at or after a timestamp."""
+    import time as _time
+    now = int(_time.time())
+    await db.insert_message(
+        channel="telegram", chat_id="c1", message_id="count_old",
+        sender_id="u1", content="old", direction="inbound",
+        created_at=now - 10000,
+    )
+    await db.insert_message(
+        channel="telegram", chat_id="c1", message_id="count_new",
+        sender_id="u1", content="new", direction="inbound",
+        created_at=now,
+    )
+    count = await db.get_messages_count_since(now - 1)
+    assert count == 1

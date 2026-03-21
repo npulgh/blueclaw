@@ -428,6 +428,7 @@ class Database:
         group_name: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 20,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Return messages with optional group/status filters, newest first."""
         conditions: list[str] = []
@@ -439,9 +440,9 @@ class Database:
             conditions.append("status=?")
             params.append(status)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        params.append(limit)
+        params.extend([limit, offset])
         async with self._conn.execute(
-            f"SELECT * FROM messages {where} ORDER BY created_at DESC LIMIT ?",
+            f"SELECT * FROM messages {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
             params,
         ) as cur:
             rows = await cur.fetchall()
@@ -452,20 +453,30 @@ class Database:
         *,
         group_name: Optional[str] = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Return tool audit log entries, newest first."""
         if group_name is not None:
             sql = (
                 "SELECT * FROM tool_audit_log WHERE group_name=? "
-                "ORDER BY created_at DESC LIMIT ?"
+                "ORDER BY created_at DESC LIMIT ? OFFSET ?"
             )
-            params: tuple[Any, ...] = (group_name, limit)
+            params: tuple[Any, ...] = (group_name, limit, offset)
         else:
-            sql = "SELECT * FROM tool_audit_log ORDER BY created_at DESC LIMIT ?"
-            params = (limit,)
+            sql = "SELECT * FROM tool_audit_log ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            params = (limit, offset)
         async with self._conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    async def get_messages_count_since(self, ts: int) -> int:
+        """Return the number of messages created at or after the given Unix timestamp."""
+        async with self._conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE created_at >= ?",
+            (ts,),
+        ) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else 0
 
     async def get_all_sessions(self) -> list[dict[str, Any]]:
         """Return all session rows ordered by last_active descending."""
