@@ -226,3 +226,57 @@ Phase 4 实现了容器安全加固（`--read-only`、`--cap-drop ALL`、`--secu
 - [ ] 确认新模式下环境变量的存在/缺失不会触发意外退出
 - [ ] 容器 stdout/stderr 在错误路径下有足够的诊断信息
 - [ ] 错误日志同时打印 stdout 和 stderr（不只打印 stderr）
+
+---
+
+## 飞书渠道接入经验（2026-03-21）
+
+> 飞书 WebSocket 长连接模式（ADR-003）首次实际接入。修复 3 个 bug，发现 1 个平台间歇性问题。
+
+### 问题 10：lark_oapi 模块级 event loop 缓存导致 RuntimeError
+
+**现象**: daemon thread 中 `ws.Client.start()` 抛 `RuntimeError: This event loop is already running`。
+
+**根因**: `lark_oapi/ws/client.py` 第 26 行在模块加载时执行 `loop = asyncio.get_event_loop()` 缓存为模块级变量。后续 `start()` 用此缓存 loop 调用 `run_until_complete()`，而该 loop 已在主线程运行中。在子线程内 `asyncio.new_event_loop()` + `set_event_loop()` 无效，因为 SDK 不重新读取 `get_event_loop()`。
+
+**修复**: Monkey-patch `lark_oapi.ws.client.loop = fresh_loop`。
+
+**教训**: 第三方 SDK 模块级缓存 event loop 是常见陷阱。排查时先 `grep "get_event_loop\|run_until_complete"` SDK 源码。
+
+---
+
+### 问题 11：飞书 PATCH 消息类型不匹配 400 错误
+
+**现象**: `code=230001, This message is NOT a card`。流式 edit_message 返回 400。
+
+**根因**: `send_message()` 发纯文本，`edit_message()` 用 Interactive Card 格式 PATCH。飞书不允许跨类型修改。
+
+**修复**: `_build_content()` 始终返回 Interactive Card，确保首条消息和后续编辑类型一致。
+
+**教训**: 飞书消息编辑 API 要求消息类型前后一致。要支持流式编辑，首条消息必须是目标格式（卡片）。
+
+---
+
+### 问题 12：飞书 WebSocket 事件投递间歇性失败
+
+**现象**: WebSocket Handshake OK，ping/pong 正常，但发消息后无事件到达。重启后有时恢复。
+
+**根因**: 多因素叠加——
+1. 飞书后台事件订阅需**手动单独添加**（权限导入不含事件订阅）
+2. 每次修改权限/事件订阅后需**重新发布版本**
+3. 飞书 WebSocket 平台侧存在间歇性事件投递延迟
+
+**修复**: 确认配置完整 + 重新发布 + 重启 bot。
+
+**教训**: 飞书的权限系统和事件订阅是**两个独立系统**。"权限已开通" ≠ "事件订阅已配置"。每次变更后必须重新发布版本。
+
+---
+
+### 飞书 Adapter 开发检查清单
+
+- [ ] `lark_oapi.ws.client.loop` 已被 monkey-patch 为独立 event loop
+- [ ] `_build_content()` 始终返回 Interactive Card（支持流式编辑）
+- [ ] 飞书后台事件订阅已启用 + `im.message.receive_v1` 已添加
+- [ ] 接收方式选择"长连接"
+- [ ] 应用已发布（不是"开发中"）
+- [ ] 修改配置后已重新发布版本
