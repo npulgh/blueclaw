@@ -717,7 +717,14 @@ lynxclaw/
 │   │   ├── telegram.py         # aiogram v3 + TokenBucket 限频
 │   │   ├── feishu.py           # lark-oapi WebSocket + Webhook
 │   │   └── example_adapter.py  # Echo 适配器（测试参考）
-│   └── server.py               # FastAPI（Webhook + /metrics）
+│   ├── dashboard/
+│   │   ├── auth.py             # Bearer Token 认证依赖
+│   │   ├── api.py              # 7 个只读 API 端点（/api/*）
+│   │   └── static/             # SPA 前端（Alpine.js + Tailwind CDN）
+│   │       ├── index.html
+│   │       ├── app.js
+│   │       └── style.css
+│   └── server.py               # FastAPI（Webhook + Dashboard API + StaticFiles）
 ├── container/
 │   └── agent-runner/
 │       ├── requirements.txt
@@ -732,7 +739,7 @@ lynxclaw/
 │   ├── store/messages.db
 │   ├── ipc/{group}/            # outbox/ inbox/ audit/
 │   └── audit_log.jsonl
-├── tests/                      # 381 pass, 2 skip（22 个测试文件）
+├── tests/                      # 417 pass, 2 skip（含 dashboard API + auth 测试）
 │   └── test_e2e_local.py       # E2E 测试（需 Docker + API key）
 ├── docs/
 │   ├── ARCHITECTURE.md         # 本文件
@@ -860,3 +867,71 @@ _ALLOWED_ENV_PREFIXES = {"ANTHROPIC_", "LYNXCLAW_", "CLAUDE_CODE_DISABLE_"}
 - 不在白名单的消息返回 `RouteResult.UNAUTHORIZED`
 
 **影响范围**：`src/router.py`、`src/config.py`
+
+---
+
+## 十一、Web Dashboard（Phase 6，2026-03-21）
+
+> 设计文档：[superpowers/specs/2026-03-21-web-dashboard-design.md](superpowers/specs/2026-03-21-web-dashboard-design.md)
+
+### 11.1 概述
+
+只读 Web Dashboard，用于可视化系统状态。扩展现有 `WebhookServer`，共享同一 uvicorn 实例，零新增进程。
+
+### 11.2 架构
+
+```text
+[Browser] → http://localhost:8080
+    │
+    ├─ GET /           → StaticFiles（index.html / app.js / style.css）
+    ├─ GET /api/*      → Dashboard API（FastAPI router，Bearer Token 认证）
+    ├─ POST /webhook/* → 现有 Webhook 端点（不变）
+    └─ GET /health     → 健康检查（不变）
+```
+
+### 11.3 认证
+
+- **Static Bearer Token**：从环境变量 `LYNXCLAW_DASHBOARD_TOKEN` 读取（模块加载时一次，不进 config.yaml）
+- 未配置 → 503；错误 Token → 401；正确 → 200
+- 前端存入 `sessionStorage`，关闭标签页后失效
+
+### 11.4 API 端点（7 个，全部 GET，只读）
+
+| 端点 | 描述 |
+| ---- | ---- |
+| `/api/system/overview` | Groups 数、活跃容器、今日消息、累计 Token |
+| `/api/groups` | Groups 列表 + session 状态 |
+| `/api/messages` | 消息历史（?group / ?status / ?limit / ?offset） |
+| `/api/audit` | 工具审计日志（?group / ?limit / ?offset） |
+| `/api/tasks` | 定时任务列表（?group） |
+| `/api/usage` | Token 用量（?group / ?since，Unix timestamp 秒） |
+| `/api/config` | 只读配置（`anthropic_api_key`、`bot_token`、`app_secret`、`app_id` 脱敏为 `***`） |
+
+### 11.5 前端
+
+- **Alpine.js 3.x + Tailwind CSS 3.x + Chart.js 4.x**（全部 CDN，零构建步骤）
+- 4 页 SPA：系统概览、消息审计、任务管理、指标图表
+- hash 路由（`#/overview`、`#/messages`、`#/tasks`、`#/metrics`）
+
+### 11.6 配置
+
+```yaml
+# lynxclaw.config.yaml
+dashboard:
+  enabled: true   # 默认 false
+```
+
+```bash
+# .env
+LYNXCLAW_DASHBOARD_TOKEN=your-secret
+```
+
+### 11.7 关键设计决策
+
+| 决策 | 理由 |
+| ---- | ---- |
+| 扩展现有 `WebhookServer` 而非独立进程 | 零新增依赖，共享 DB 连接，符合小而可审计原则 |
+| StaticFiles 在 `start()` 而非 `__init__` 中挂载 | catch-all `"/"` 会遮蔽后续注册的 webhook 路由 |
+| Bearer Token 而非 Username/Password | 最简实现，适合内部运维工具 |
+| CDN 而非本地构建 | 零 Node.js 依赖，Tailwind Play CDN 对内部工具可接受 |
+| `dataclasses.asdict()` + 路径覆写 | 序列化 Config 最直接的方式，脱敏逻辑集中 |

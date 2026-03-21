@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Status
 
-**Lynxclaw MVP is complete.** All 4 phases implemented and tested (2026-03-19). Phase 5 架构升级完成（2026-03-21）：Credential Proxy、Skills 系统、安全配置外置、Sender Allowlist、Channel 自注册。402 unit/integration tests pass, 2 skipped (Windows symlink). E2E test suite exists (`tests/test_e2e_local.py`) with 6/8 passing (2 depend on live API availability).
+**Lynxclaw MVP is complete.** All 4 phases implemented and tested (2026-03-19). Phase 5 架构升级完成（2026-03-21）：Credential Proxy、Skills 系统、安全配置外置、Sender Allowlist、Channel 自注册。Phase 6 Web Dashboard 完成（2026-03-21）：7 个只读 API、Bearer Token 认证、Alpine.js SPA 前端。417 unit/integration tests pass, 2 skipped (Windows symlink). E2E test suite exists (`tests/test_e2e_local.py`) with 6/8 passing (2 depend on live API availability).
 
 ## What This Project Is
 
@@ -14,7 +14,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ```bash
 python -m src.main                                              # Start the host process
-python -m pytest tests/                                         # Run all tests (381 pass, ~17s)
+python -m pytest tests/                                         # Run all tests (417 pass, ~22s)
 python -m pytest tests/ --ignore=tests/test_e2e_local.py        # Unit/integration only (no Docker needed)
 python -m pytest tests/test_e2e_local.py                        # E2E (requires Docker + API key)
 docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .  # Build agent image
@@ -23,7 +23,7 @@ docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .  # 
 ## Key Design Documents
 
 - `docs/ARCHITECTURE.md` — component design, security model, data schema, directory structure
-- `docs/TASKS.md` — phased task list with acceptance criteria (Phase 1-4 complete, backlog at bottom)
+- `docs/TASKS.md` — phased task list with acceptance criteria (Phase 1-6 complete, backlog at bottom)
 - `docs/adr/` — architecture decision records explaining *why* key decisions were made
 - `docs/E2E-TESTING.md` — E2E testing strategy and runbook
 - `docs/adr/ADR-005-container-hardening-lessons.md` — container hardening lessons learned
@@ -68,7 +68,11 @@ src/
     telegram.py           # aiogram v3 adapter
     feishu.py             # lark-oapi WebSocket adapter
     example_adapter.py    # Mock adapter for testing
-  server.py               # FastAPI (webhook + /metrics)
+  dashboard/
+    auth.py             # Bearer Token authentication dependency
+    api.py              # 7 read-only API endpoints (/api/*)
+    static/             # SPA frontend (Alpine.js + Tailwind CDN)
+  server.py               # FastAPI (webhook + dashboard API + StaticFiles)
 container/agent-runner/
   Dockerfile              # python:3.11-slim, non-root user 1000
   requirements.txt        # claude-agent-sdk + deps
