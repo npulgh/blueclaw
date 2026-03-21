@@ -346,3 +346,61 @@ async def test_recover_pending_marks_failed_when_no_group(db: Database):
     )
     assert row is not None
     assert row["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Sender allowlist tests
+# ---------------------------------------------------------------------------
+
+async def test_sender_denied_when_not_in_allowlist(db):
+    """Messages from senders not in allowed_senders are denied."""
+    cfg = _make_config(groups=[
+        GroupConfig(
+            name="restricted",
+            channel="telegram",
+            chat_id="12345",
+            is_main=False,
+            trigger="",
+            allowed_senders=["user_100", "user_200"],
+        )
+    ])
+    r = MessageRouter()
+    await r.init(db, cfg)
+    result = await r.route(_msg(chat_id="12345", sender_id="user_999", text="hello"))
+    assert result == RouteResult.DENIED
+
+
+async def test_sender_allowed_when_in_allowlist(db):
+    """Messages from senders in allowed_senders are accepted."""
+    cfg = _make_config(groups=[
+        GroupConfig(
+            name="restricted",
+            channel="telegram",
+            chat_id="12345",
+            is_main=False,
+            trigger="",
+            allowed_senders=["user_100"],
+        )
+    ])
+    r = MessageRouter()
+    await r.init(db, cfg)
+    result = await r.route(_msg(chat_id="12345", sender_id="user_100", text="hello"))
+    assert result == RouteResult.QUEUED
+
+
+async def test_empty_allowlist_permits_all_senders(db):
+    """Empty allowed_senders list means no restriction."""
+    cfg = _make_config(groups=[
+        GroupConfig(
+            name="open",
+            channel="telegram",
+            chat_id="12345",
+            is_main=False,
+            trigger="",
+            allowed_senders=[],
+        )
+    ])
+    r = MessageRouter()
+    await r.init(db, cfg)
+    result = await r.route(_msg(chat_id="12345", sender_id="anyone", text="hello"))
+    assert result == RouteResult.QUEUED
