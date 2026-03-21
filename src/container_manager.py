@@ -333,7 +333,22 @@ class ContainerManager:
             builtin_env["HTTP_PROXY"] = "http+unix:///proxy/proxy.sock"
             builtin_env["HTTPS_PROXY"] = "http+unix:///proxy/proxy.sock"
 
+        # Environment variable prefix whitelist — only vars matching these
+        # prefixes are forwarded to containers. Prevents accidental credential
+        # leakage (ADR-006).
+        _ALLOWED_ENV_PREFIXES = (
+            "ANTHROPIC_",
+            "LYNXCLAW_",
+            "CLAUDE_CODE_DISABLE_",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "IPC_BASE_DIR",
+        )
+
         for k, v in {**builtin_env, **env_vars}.items():
+            if not any(k.startswith(p) for p in _ALLOWED_ENV_PREFIXES):
+                log.warning("container.env_blocked", key=k, group=group_name)
+                continue
             cmd += ["-e", f"{k}={v}"]
 
         # Image

@@ -227,10 +227,37 @@ class TestBuildCommand:
         # No -v flags when no mounts provided
         assert "-v" not in cmd
 
+    def test_env_whitelist_blocks_unknown_vars(self):
+        """Environment variables not matching allowed prefixes are blocked (ADR-006)."""
+        m = _make_manager()
+        cmd = m._build_command(
+            group_name="test",
+            env_vars={
+                "LYNXCLAW_CHAT_ID": "123",
+                "ANTHROPIC_BASE_URL": "http://proxy:3001",
+                "AWS_SECRET_KEY": "should-be-blocked",
+                "RANDOM_VAR": "also-blocked",
+            },
+            mounts={},
+            session_id="sid",
+        )
+        env_str = " ".join(cmd)
+        assert "LYNXCLAW_CHAT_ID" in env_str
+        assert "ANTHROPIC_BASE_URL" in env_str
+        assert "AWS_SECRET_KEY" not in env_str
+        assert "RANDOM_VAR" not in env_str
 
-# ---------------------------------------------------------------------------
-# _validate_mounts — blocked patterns
-# ---------------------------------------------------------------------------
+    def test_env_whitelist_allows_claude_code_disable(self):
+        """CLAUDE_CODE_DISABLE_ prefix is allowed through whitelist."""
+        m = _make_manager()
+        cmd = m._build_command(
+            group_name="test",
+            env_vars={"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
+            mounts={},
+            session_id="sid",
+        )
+        env_str = " ".join(cmd)
+        assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" in env_str
 
 class TestValidateMounts:
     def test_clean_paths_pass(self):
