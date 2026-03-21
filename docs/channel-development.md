@@ -376,3 +376,88 @@ from within an already-running loop.
 Lynxclaw's security model keeps IM credentials in the host process only.
 Never pass `bot_token`, `app_secret`, or similar values into container env vars.
 Only `ANTHROPIC_API_KEY` enters containers.
+
+---
+
+## 6. IM 通道可行性评估
+
+> 调研时间：2026-03-21。为后续 Channel 扩展提供决策参考。
+
+### 已实现
+
+| 通道 | SDK | 连接方式 | 状态 |
+|------|-----|----------|------|
+| Telegram | aiogram v3 | Long Polling | ✅ 生产可用 |
+| 飞书 | lark-oapi | WebSocket | ✅ 生产可用 |
+
+### 评估结论
+
+| 通道 | 可行性 | 推荐方案 | 工作量 | 备注 |
+|------|--------|----------|--------|------|
+| Discord | 高 | discord.py | 1 天 | 官方 API，WebSocket 长连接 |
+| Slack | 高 | slack-bolt | 1 天 | 官方 API，WebSocket/Events API |
+| 企业微信 | 高 | wechatpy | 1-2 天 | 官方 API，HTTP 回调（需公网 IP） |
+| 个人微信 | 不推荐 | — | — | 无官方 API，所有方案均为逆向工程，封号风险高 |
+
+### 企业微信（WeCom）详细评估
+
+**推荐方案：自建应用（Custom App）**
+
+架构适配：
+```
+用户在企业微信发消息
+  → 企业微信服务器 POST AES 加密 XML 到回调 URL
+  → WeComAdapter 解密 + 解析
+  → 路由到 Lynxclaw agent 容器
+  → Agent 生成回复
+  → Adapter 调用企业微信 send message API
+  → 用户看到回复
+```
+
+关键特性：
+- 官方 REST API，零封号风险
+- 双向消息（发送 + 接收回调）
+- 支持文本、图片、语音、视频、文件、Markdown、模板卡片
+- 消息 AES 加密（wechatpy SDK 透明处理）
+- 国内服务，无 GFW 问题
+- 注册免费，无需企业认证即可开发（限 200 人）
+- 注册人自动成为超级管理员，拥有创建自建应用权限
+
+所需凭证：
+| 凭证 | 来源 |
+|------|------|
+| `corpid` | 管理后台 → 我的企业 → 企业ID |
+| `secret` | 管理后台 → 应用管理 → 自建应用 → Secret |
+| `agentid` | 管理后台 → 应用管理 → 自建应用 → AgentId |
+| `token` + `encoding_aes_key` | 管理后台 → 应用管理 → 接收消息 → API 接收设置 |
+
+与现有 Channel 的差异：
+| 维度 | Telegram | 飞书 | 企业微信 |
+|------|----------|------|----------|
+| 连接方式 | Long Polling | WebSocket | HTTP 回调 |
+| 流式支持 | edit_message | edit_message | edit_message（同模式） |
+| GFW | 需代理 | 不需要 | 不需要 |
+| 消息加密 | 无 | 无 | AES（SDK 处理） |
+
+注意事项：
+- HTTP 回调模式需要公网可达的 endpoint（与 ADR-003 长连接优先原则不同）
+- 可复用 `src/server.py`（FastAPI）接收回调
+- 开发阶段可用 ngrok/frp 做内网穿透
+
+Python SDK：[wechatpy](https://github.com/wechatpy/wechatpy)（4.2k stars，`wechatpy.enterprise` 模块）
+
+成功案例：
+- [AstrBot](https://github.com/AstrBotDevs/AstrBot)（17k stars）— 多平台 AI 聊天框架，支持企业微信
+- [chatgpt-on-wechat](https://github.com/zhayujie/chatgpt-on-wechat) — 最活跃的 AI+微信集成项目
+- [Dify + WeCom](https://github.com/luolin-ai/Dify-Enterprise-WeChat-bot) — 零代码 AI 工作流对接企业微信
+
+### 个人微信——为什么不推荐
+
+| 方案 | 原理 | 现状 | 风险 |
+|------|------|------|------|
+| itchat | Web 协议逆向 | 已死，微信关闭大部分账号 Web 登录 | — |
+| wechaty (web) | 同上 | 不可用 | — |
+| WeChatFerry | Windows 客户端 DLL 注入 | 活跃，需固定微信版本 | 高，且需 Windows |
+| GeWe | iPad 协议逆向（商业） | 提供 Docker + REST API | 中高，商业依赖 |
+
+核心问题：微信从 2019 年起持续封杀第三方自动化，先警告 → 限制登录 → 永久封号。所有方案都是灰色地带，不符合 Lynxclaw 安全优先的设计哲学。
