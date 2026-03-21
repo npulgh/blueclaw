@@ -107,7 +107,7 @@ class FeishuAdapter(ChannelAdapter):
         self._loop = asyncio.get_running_loop()
 
         self._ws_thread = threading.Thread(
-            target=self._ws_client.start,
+            target=self._run_ws_in_new_loop,
             name="feishu-ws",
             daemon=True,
         )
@@ -208,6 +208,30 @@ class FeishuAdapter(ChannelAdapter):
             supports_rich_text=True,
             supports_attachments=False,
         )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _run_ws_in_new_loop(self) -> None:
+        """Run lark ws.Client.start() with a fresh event loop.
+
+        lark_oapi caches the event loop as a module-level variable at import
+        time (line 26 of ws/client.py).  When we run inside asyncio, that
+        cached loop is already running → run_until_complete() raises.
+        We patch the module-level ``loop`` to a fresh one before calling start().
+        """
+        import lark_oapi.ws.client as ws_mod
+
+        fresh_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(fresh_loop)
+        ws_mod.loop = fresh_loop  # override the cached module-level loop
+        try:
+            self._ws_client.start()
+        except Exception:
+            logger.exception("feishu_ws_thread_error")
+        finally:
+            fresh_loop.close()
 
     # ------------------------------------------------------------------
     # Internal lark event handler (called from ws thread)
@@ -312,8 +336,17 @@ class FeishuAdapter(ChannelAdapter):
 # ---------------------------------------------------------------------------
 
 def _build_content(content: OutgoingMessage) -> tuple[str, str]:
-    """Return (msg_type, content_json) for a Feishu send_message call."""
+    """Return (msg_type, content_json) for a Feishu send_message call.
+
+    Always sends as Interactive Card so that subsequent edit_message()
+    calls (which PATCH with card content) work correctly.  Feishu does
+    not allow patching a plain-text message into a card.
+    """
     if content.rich_text:
         return "interactive", json.dumps(content.rich_text)
     text = content.text or ""
-    return "text", json.dumps({"text": text})
+    card = {
+        "config": {"wide_screen_mode": True},
+        "elements": [{"tag": "markdown", "content": text}],
+    }
+    return "interactive", json.dumps(card)
