@@ -120,7 +120,7 @@ class CredentialProxy:
                     log.warning("credential_proxy.forward_error", error=str(exc))
                     self.send_error(502, f"Proxy error: {exc}")
 
-        self._server = HTTPServer(("127.0.0.1", self._port), Handler)
+        self._server = HTTPServer(("0.0.0.0", self._port), Handler)
         self._thread = threading.Thread(
             target=self._server.serve_forever, daemon=True,
         )
