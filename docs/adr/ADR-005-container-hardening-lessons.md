@@ -144,3 +144,85 @@ Phase 4 实现了容器安全加固（`--read-only`、`--cap-drop ALL`、`--secu
 - [ ] 所有需要写入的目录有对应的 `--tmpfs` 挂载（含正确的 `uid=`/`gid=`）
 - [ ] 第三方二进制（Node.js、Python 等）的写文件行为已通过 `find / -newer /proc/1` 验证
 - [ ] tmpfs 的 `noexec` 标志与运行时需求兼容（Node.js JIT 需要可执行内存映射）
+
+---
+
+## Phase 5 实战经验（2026-03-21）
+
+> Phase 5 引入 Credential Proxy（ADR-006）、Skills 系统（ADR-007）等功能。
+> 手动 E2E 测试暴露了三个关键问题。
+
+### 问题 6：Credential Proxy 绑定 127.0.0.1 + 容器 --network none
+
+**现象**: 容器 exit_code=1，stdout 58 字节 `missing ANTHROPIC_API_KEY`。
+
+**根因**: Credential Proxy 设计为容器通过 `http://host.docker.internal:3001` 访问 host 上的代理。但：
+1. Credential Proxy 绑定 `127.0.0.1`，Docker bridge 网络无法访问 loopback
+2. 容器 `--network none` 完全隔离，无法访问任何网络地址
+
+**修复**:
+- Credential Proxy 绑定改为 `0.0.0.0`
+- 当 Credential Proxy 启用时，容器网络从 `none` 改为 `bridge`
+
+**教训**: 设计容器→host 通信时，必须同时考虑 proxy 绑定地址和容器网络模式。`127.0.0.1` 只对 host 本地进程可达。
+
+---
+
+### 问题 7：Docker Desktop (Windows/WSL2) 无法解析 host.docker.internal
+
+**现象**: 修复问题 6 后，容器仍然失败。`Name or service not known` — 容器内无法解析 `host.docker.internal`。`--add-host=host.docker.internal:host-gateway` 超时，`172.17.0.1`（bridge 网关）Connection refused。
+
+**根因**: Docker Desktop for Windows 使用 WSL2 后端，网络拓扑与 Linux 原生 Docker 不同。容器→host 的网络路径不可靠。
+
+**修复**: Credential Proxy 改为 opt-in（`LYNXCLAW_CREDENTIAL_PROXY=1`），默认关闭，回退到直接传 API key 的方式。
+
+**教训**:
+1. **跨平台网络假设是危险的** — `host.docker.internal` 在 Linux 原生 Docker 上可靠，在 Docker Desktop (Windows/macOS) 上不一定。架构设计必须有 fallback。
+2. **安全增强功能必须可降级** — Credential Proxy 是安全增强，但不能因为它导致核心功能不可用。opt-in + fallback 是正确模式。
+
+---
+
+### 问题 8：容器内 API key 前置检查与 Proxy 模式冲突
+
+**现象**: 修复网络问题后，容器仍然 exit_code=1，`missing ANTHROPIC_API_KEY`。
+
+**根因**: `container/agent-runner/main.py` 在 `main()` 和 `persistent_loop()` 两处检查 `ANTHROPIC_API_KEY`，为空则 `sys.exit(1)`。Credential Proxy 模式下容器不再有 API key（by design），但前置检查不知道这一点。
+
+**修复**: 当 `ANTHROPIC_BASE_URL` 存在时，用占位符 `sk-placeholder-credential-proxy` 绕过检查。SDK 只需要一个非空值来初始化，实际认证由 Credential Proxy 注入。
+
+**教训**: 引入新的运行模式时，必须审查所有前置检查（`sys.exit`、`raise`、`assert`），确认它们在新模式下仍然合理。搜索 `sys.exit` 是最快的审查方式。
+
+---
+
+### 问题 9：Agent 回复泄露内部推理
+
+**现象**: Bot 回复开头出现 `The user asked "天津在哪里"... Please provide a brief, accurate answer`，这是 agent 的内部思考，不应暴露给用户。
+
+**根因**: `run_agent()` 没有设置 `system_prompt`，Claude Agent SDK 默认行为下 agent 会把推理过程混入输出文本。
+
+**修复**: `ClaudeAgentOptions` 加 `system_prompt`，明确要求直接回复用户、不输出内部推理。
+
+**教训**: 容器化 agent 必须有明确的 system prompt。没有 system prompt 的 agent 行为不可预测，尤其是输出格式。这不是"可选优化"，是必要配置。
+
+---
+
+## 经验提炼（更新）
+
+### 容器→Host 通信检查清单
+
+在设计容器访问 host 服务的架构时，必须确认：
+
+- [ ] Host 服务绑定 `0.0.0.0`（不是 `127.0.0.1`）
+- [ ] 容器网络模式允许访问 host（`bridge` 或 `host`，不能是 `none`）
+- [ ] `host.docker.internal` 在目标平台上可解析（Linux 原生 Docker 需要 `--add-host`）
+- [ ] 有 fallback 方案应对网络不通的情况（opt-in + 降级）
+- [ ] 防火墙/安全组不阻止容器→host 端口
+
+### 新运行模式引入检查清单
+
+引入新的运行模式（如 Credential Proxy 模式）时：
+
+- [ ] `grep -r "sys.exit" container/` — 审查所有前置检查
+- [ ] 确认新模式下环境变量的存在/缺失不会触发意外退出
+- [ ] 容器 stdout/stderr 在错误路径下有足够的诊断信息
+- [ ] 错误日志同时打印 stdout 和 stderr（不只打印 stderr）

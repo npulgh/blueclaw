@@ -115,6 +115,12 @@ async def run_agent(
     options = ClaudeAgentOptions(
         max_turns=30,
         hooks=hooks,
+        system_prompt=(
+            "You are a helpful assistant in a group chat. "
+            "Reply directly to the user's message in the same language they used. "
+            "Do NOT repeat or rephrase the user's question before answering. "
+            "Do NOT include internal reasoning, meta-commentary, or instructions in your reply."
+        ),
     )
     if session_id:
         options.resume = session_id
@@ -199,6 +205,68 @@ async def _run_with_resume_fallback(
 
 
 # ---------------------------------------------------------------------------
+# Skills loader (ADR-007)
+# ---------------------------------------------------------------------------
+
+def load_skills(global_skills_dir: str, group_skills_dir: str) -> list[dict]:
+    """Load SKILL.md files from global and group skills directories.
+
+    Returns list of {"name": str, "description": str, "content": str}.
+    Group skills override global skills with the same directory name.
+    """
+    skills: dict[str, dict] = {}
+
+    for skills_dir in (global_skills_dir, group_skills_dir):
+        if not skills_dir:
+            continue
+        base = Path(skills_dir)
+        if not base.is_dir():
+            continue
+        for skill_dir in sorted(base.iterdir()):
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.is_file():
+                continue
+            raw = skill_file.read_text(encoding="utf-8").strip()
+            name = skill_dir.name
+            description = ""
+            content = raw
+
+            # Parse optional YAML frontmatter
+            if raw.startswith("---"):
+                parts = raw.split("---", 2)
+                if len(parts) >= 3:
+                    for line in parts[1].strip().splitlines():
+                        if line.startswith("name:"):
+                            name = line.split(":", 1)[1].strip()
+                        elif line.startswith("description:"):
+                            description = line.split(":", 1)[1].strip()
+                    content = parts[2].strip()
+
+            skills[skill_dir.name] = {
+                "name": name,
+                "description": description,
+                "content": content,
+            }
+
+    return list(skills.values())
+
+
+def _inject_skills(prompt: str, group: str) -> str:
+    """Load skills and prepend them to the prompt if any are found."""
+    global_skills_dir = "/workspace/global/skills"
+    group_skills_dir = f"/workspace/group/skills"
+    skills = load_skills(global_skills_dir, group_skills_dir)
+    if not skills:
+        return prompt
+
+    skills_section = "\n# Active Skills\n"
+    for s in skills:
+        skills_section += f"\n## {s['name']}\n{s['content']}\n"
+    log.info("skills.loaded", count=len(skills), names=[s["name"] for s in skills])
+    return skills_section + "\n---\n\n" + prompt
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -214,8 +282,13 @@ async def main() -> None:
     audit_dir = Path(ipc_base) / group / "audit"
 
     if not api_key:
-        log.error("missing ANTHROPIC_API_KEY")
-        sys.exit(1)
+        # Credential Proxy mode (ADR-006): no real key in container.
+        # SDK still needs a non-empty value; use placeholder.
+        if os.environ.get("ANTHROPIC_BASE_URL"):
+            api_key = "sk-placeholder-credential-proxy"
+        else:
+            log.error("missing ANTHROPIC_API_KEY")
+            sys.exit(1)
     if not prompt:
         log.error("missing LYNXCLAW_PROMPT")
         sys.exit(1)
@@ -265,6 +338,9 @@ async def main() -> None:
     runner_dir = Path(__file__).parent
     sys.path.insert(0, str(runner_dir))
     from ipc_bridge import send_message, stream_chunk  # type: ignore
+
+    # --- Load Skills (ADR-007) ---
+    prompt = _inject_skills(prompt, group)
 
     try:
         log.info("agent starting", group=group, session_id=session_id or "new",
@@ -347,8 +423,11 @@ async def persistent_loop(group: str, ipc_base: str) -> None:
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        log.error("missing ANTHROPIC_API_KEY")
-        sys.exit(1)
+        if os.environ.get("ANTHROPIC_BASE_URL"):
+            api_key = "sk-placeholder-credential-proxy"
+        else:
+            log.error("missing ANTHROPIC_API_KEY")
+            sys.exit(1)
 
     inbox_dir = Path(ipc_base) / group / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)

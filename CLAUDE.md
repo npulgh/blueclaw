@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Status
 
-**Lynxclaw MVP is complete.** All 4 phases implemented and tested (2026-03-19). 381 unit/integration tests pass, 2 skipped (Windows symlink). E2E test suite exists (`tests/test_e2e_local.py`) with 6/8 passing (2 depend on live API availability).
+**Lynxclaw MVP is complete.** All 4 phases implemented and tested (2026-03-19). Phase 5 架构升级完成（2026-03-21）：Credential Proxy、Skills 系统、安全配置外置、Sender Allowlist、Channel 自注册。402 unit/integration tests pass, 2 skipped (Windows symlink). E2E test suite exists (`tests/test_e2e_local.py`) with 6/8 passing (2 depend on live API availability).
 
 ## What This Project Is
 
@@ -56,6 +56,7 @@ src/
   db.py                   # SQLite + migrations, 7 tables, schema v2
   scheduler.py            # Cron task scheduler
   proxy.py                # Network proxy sidecar
+  credential_proxy.py     # Credential injection proxy (ADR-006)
   observability.py        # structlog + Prometheus metrics
   types.py                # Global dataclasses
   memory.py               # Agent memory management
@@ -94,6 +95,8 @@ data/
 | Default Ephemeral containers + optional Resumable (not Persistent) | `docs/adr/005-resumable-containers.md` |
 | Database is SQLite (not PostgreSQL) | Design philosophy — zero deployment deps |
 | Container hardening flags (`--cap-drop ALL`, etc.) must not be reduced | `docs/ARCHITECTURE.md §3.4.2` |
+| API key via Credential Proxy (not container env var) | `docs/adr/006-credential-proxy.md` |
+| Skills via Markdown injection (not MCP tool or git branch) | `docs/adr/007-skills-system.md` |
 
 ## Container Security Baseline
 

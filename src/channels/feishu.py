@@ -28,6 +28,16 @@ from src.types import ChannelCapabilities, IncomingMessage, OutgoingMessage
 
 logger = structlog.get_logger(__name__)
 
+# Auto-discovery constants (used by discover_adapters)
+CHANNEL_NAME = "feishu"
+
+
+def create_adapter(config) -> "Optional[ChannelAdapter]":
+    """Factory for auto-discovery. Returns None if Feishu is not enabled."""
+    if not config.feishu.enabled:
+        return None
+    return FeishuAdapter()
+
 
 class FeishuAdapter(ChannelAdapter):
     """Feishu channel adapter using lark-oapi WebSocket long-connection.
