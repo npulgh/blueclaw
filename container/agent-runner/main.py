@@ -115,6 +115,12 @@ async def run_agent(
     options = ClaudeAgentOptions(
         max_turns=30,
         hooks=hooks,
+        system_prompt=(
+            "You are a helpful assistant in a group chat. "
+            "Reply directly to the user's message in the same language they used. "
+            "Do NOT repeat or rephrase the user's question before answering. "
+            "Do NOT include internal reasoning, meta-commentary, or instructions in your reply."
+        ),
     )
     if session_id:
         options.resume = session_id
