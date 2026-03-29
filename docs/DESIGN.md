@@ -1,6 +1,6 @@
 # Lynxclaw — 设计文档索引
 
-> **Lynxclaw** 是一个轻量级 AI 智能体运行平台，以 Anthropic Claude Agent SDK（Python）为核心，将 Claude Agent 安全地运行在 Docker 容器中，通过 IM（Telegram / 飞书）与用户交互。
+> **Lynxclaw** 是一个轻量级 AI 智能体运行平台，将 AI Agent 安全地运行在 Docker 容器中，通过 IM（Telegram / 飞书）与用户交互。
 >
 > **状态**：MVP 完成（2026-03-19）。381 测试通过，Telegram E2E 验证。
 
@@ -29,6 +29,9 @@
 | [ADR-004](adr/004-proxy-sidecar.md) | 联网走 Proxy Sidecar（不用 --network bridge） |
 | [ADR-005](adr/005-resumable-containers.md) | 默认 Ephemeral + 可选 Resumable + 可选 Persistent |
 | [ADR-005 加固教训](adr/ADR-005-container-hardening-lessons.md) | 容器加固实施经验与 Bug 修复记录 |
+| [ADR-006](adr/006-credential-proxy.md) | 凭证通过 Credential Proxy 注入（不用容器环境变量） |
+| [ADR-007](adr/007-skills-system.md) | Skills 通过 Markdown 注入（不用 MCP tool 或 git branch） |
+| [ADR-008](adr/008-sdk-abstraction.md) | SDK 定位为容器内可替换实现（IPC 解耦） |
 
 ---
 

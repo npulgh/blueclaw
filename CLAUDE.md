@@ -33,7 +33,7 @@ docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .  # 
 | Layer | Technology |
 |-------|-----------|
 | Runtime | Python 3.11+ / asyncio |
-| AI SDK | `claude-agent-sdk` (hooks, resume, MCP) |
+| AI SDK (container) | `claude-agent-sdk` (current impl, replaceable via ADR-008) |
 | Containers | Docker Engine |
 | Database | SQLite + `aiosqlite` |
 | Telegram | `aiogram` v3 (Long Polling) |
@@ -101,6 +101,7 @@ data/
 | Container hardening flags (`--cap-drop ALL`, etc.) must not be reduced | `docs/ARCHITECTURE.md §3.4.2` |
 | API key via Credential Proxy (not container env var) | `docs/adr/006-credential-proxy.md` |
 | Skills via Markdown injection (not MCP tool or git branch) | `docs/adr/007-skills-system.md` |
+| SDK is container-internal implementation (IPC-decoupled, replaceable) | `docs/adr/008-sdk-abstraction.md` |
 
 ## Container Security Baseline
 
