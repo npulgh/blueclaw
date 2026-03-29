@@ -1,3 +1,11 @@
+# LynxClaw - AI Coding Agent Framework
+# Copyright (C) 2026
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
 """Lightweight proxy that intercepts Claude Code CLI model validation requests.
 
 The Claude Code CLI calls GET /v1/models/{model_id}?beta=true before sending
