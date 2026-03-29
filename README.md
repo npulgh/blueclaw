@@ -239,4 +239,6 @@ IM 凭证永远不进容器，仅 `ANTHROPIC_API_KEY` 通过环境变量注入�
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 (AGPL-3.0)
+
+详见 [LICENSE](./LICENSE) 文件。
