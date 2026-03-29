@@ -8,12 +8,13 @@
 
 """Lynxclaw Agent Runner — container entry point.
 
-Reads env vars, runs the Claude Agent SDK, and sends the response back to the
+Reads env vars, runs the AI Agent SDK, and sends the response back to the
 host via IPC (ipc_bridge). Hooks intercept dangerous Bash commands and write
 audit logs.
 
 run_agent() is the single abstraction point for SDK interaction — future
-backend changes only touch this function.
+backend changes (e.g., switching to OpenAI SDK, Gemini SDK) only require
+modifying this function. The IPC protocol and Host code remain unchanged.
 
 Streaming: when streaming is enabled (LYNXCLAW_STREAMING=1), run_agent()
 emits stream_chunk IPC calls as text events arrive from the SDK, with

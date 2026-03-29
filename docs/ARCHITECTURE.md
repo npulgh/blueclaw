@@ -11,7 +11,7 @@
 
 ## 一、项目定位
 
-**Lynxclaw** 是一个轻量级 AI 智能体运行平台，以 **Anthropic Claude Agent SDK（Python）** 为核心，将 Claude Agent 安全地运行在 Docker 容器中，通过 IM（Telegram / 飞书）与用户交互。
+**Lynxclaw** 是一个轻量级 AI 智能体运行平台，将 AI Agent 安全地运行在 Docker 容器中，通过 IM（Telegram / 飞书）与用户交互。
 
 ### 设计哲学
 
@@ -266,6 +266,20 @@ data/ipc/{group}/
 ### 3.6 Agent Runner 与安全钩子
 
 **文件**：`container/agent-runner/main.py`
+
+#### SDK 抽象与可替换性
+
+容器内 Agent 实现通过 `run_agent()` 函数与 Host 解耦：
+
+- **IPC 协议与 SDK 无关**：Host 只关心 IPC 文件格式（`stream_chunk`, `send_message` 等），不依赖特定 SDK
+- **单一抽象点**：`run_agent()` 是唯一的 SDK 交互函数，更换 SDK 只需修改此函数
+- **容器镜像可插拔**：未来可提供多个镜像变体（`lynxclaw-agent-claude`, `lynxclaw-agent-openai`），通过配置选择
+
+**当前实现**：使用 Claude Agent SDK（Python），提供开箱即用的工具循环、MCP 支持、session resume。
+
+**更换成本**：中等。需要重新实现工具循环、session 管理、hooks 拦截逻辑。IPC 层和 Host 代码无需改动。
+
+#### 安全钩子
 
 使用 Claude Agent SDK 的 `hooks` 机制：
 
@@ -614,8 +628,8 @@ CREATE TABLE token_usage (
 
 | 类别 | 技术 | 理由 |
 | ---- | ---- | ---- |
-| 运行时 | Python 3.11+ | Agent SDK 官方支持 |
-| AI SDK | `claude-agent-sdk` | 含 hooks / resume / MCP |
+| 运行时 | Python 3.11+ | asyncio 生态成熟 |
+| AI SDK（容器内） | `claude-agent-sdk` | 当前实现：含 hooks / resume / MCP（可替换） |
 | 容器 | Docker Engine | 跨平台 |
 | 数据库 | SQLite + `aiosqlite` | 零依赖，async |
 | Telegram | `aiogram` v3 | 原生 asyncio |

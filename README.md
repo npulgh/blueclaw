@@ -1,6 +1,6 @@
 # Lynxclaw
 
-轻量级 AI 智能体运行平台。以 Anthropic Claude Agent SDK（Python）为核心，将 Claude Agent 安全地运行在 Docker 容器中，通过 Telegram / 飞书与用户交互。
+轻量级 AI 智能体运行平台。将 AI Agent 安全地运行在 Docker 容器中，通过 Telegram / 飞书与用户交互。
 
 ## 设计哲学
 
