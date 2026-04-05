@@ -6,7 +6,25 @@ build-backend = "setuptools.build_meta"
 name = "lynxclaw"
 version = "0.1.0"
 description = "Lightweight AI agent runtime platform"
+readme = "README.en.md"
+license = {text = "AGPL-3.0"}
 requires-python = ">=3.11"
+authors = [
+    {name = "lynxpurr"},
+]
+keywords = ["ai-agent", "docker", "telegram", "feishu", "lark", "claude", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Communications :: Chat",
+]
+
 dependencies = [
     "aiosqlite>=0.20",
     "aiogram>=3.7",
@@ -21,6 +39,13 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
 ]
+
+[project.urls]
+Homepage = "https://github.com/lynxpurr/lynxclaw"
+Documentation = "https://github.com/lynxpurr/lynxclaw/blob/main/docs/ARCHITECTURE.md"
+Repository = "https://github.com/lynxpurr/lynxclaw.git"
+Issues = "https://github.com/lynxpurr/lynxclaw/issues"
+Changelog = "https://github.com/lynxpurr/lynxclaw/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
