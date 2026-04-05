@@ -46,7 +46,7 @@ Docker Container  (--cap-drop ALL / --read-only / --network none)
 ### 安装
 
 ```bash
-git clone https://github.com/yourname/lynxclaw.git
+git clone https://github.com/lynxpurr/lynxclaw.git
 cd lynxclaw
 
 # 创建并激活虚拟环境
