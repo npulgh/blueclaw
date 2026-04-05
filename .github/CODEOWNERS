@@ -1,0 +1,9 @@
+# Global fallback - all files
+* @lynxpurr
+
+# Documentation
+/docs/ @lynxpurr
+*.md @lynxpurr
+
+# CI/CD configuration
+/.github/ @lynxpurr

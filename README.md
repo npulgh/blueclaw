@@ -1,5 +1,11 @@
 # Lynxclaw
 
+[![CI](https://github.com/lynxpurr/lynxclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/lynxpurr/lynxclaw/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+
+[English](README.en.md) | 中文
+
 轻量级 AI 智能体运行平台。将 AI Agent 安全地运行在 Docker 容器中，通过 Telegram / 飞书与用户交互。
 
 ## 设计哲学
@@ -170,7 +176,7 @@ docker compose up -d --build
 ### 运行测试
 
 ```bash
-python -m pytest tests/                                         # 全部测试（381 pass，~17s）
+python -m pytest tests/                                         # 全部测试（417 pass，~22s）
 python -m pytest tests/ --ignore=tests/test_e2e_local.py        # 仅单元/集成（不需要 Docker）
 python -m pytest tests/test_e2e_local.py                        # E2E（需要 Docker + API key）
 ```
@@ -235,7 +241,7 @@ IM 凭证永远不进容器，仅 `ANTHROPIC_API_KEY` 通过环境变量注入�
 
 ## 开发状态
 
-**MVP 已完成**（2026-03-19）。4 个开发阶段全部实现并测试通过，381 个单元/集成测试 pass。详见 [docs/TASKS.md](docs/TASKS.md)。
+**MVP 已完成**（2026-03-19）。4 个开发阶段全部实现并测试通过，417 个单元/集成测试 pass。详见 [docs/TASKS.md](docs/TASKS.md)。
 
 ## License
 

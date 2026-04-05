@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题报告
+    url: https://github.com/lynxpurr/lynxclaw/security/advisories/new
+    about: 请通过 GitHub Security Advisories 私下报告安全漏洞
+  - name: 讨论区
+    url: https://github.com/lynxpurr/lynxclaw/discussions
+    about: 对于问题、想法或一般性讨论
