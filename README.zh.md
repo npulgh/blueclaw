@@ -15,7 +15,7 @@
 | 容器即安全边界 | Agent 运行在最小权限 Docker 容器中，OS 级隔离 |
 | 纵深防御 | 容器隔离 + 网络代理 + 工具钩子 + 挂载白名单，多层叠加 |
 | 流式优先 | Agent 响应边生成边推送到 IM，用户无需等待完整回复 |
-| 小而可审计 | 核心代码 ≤ 5,000 行 |
+| 小而可审计 | 核心代码不到 8,000 行 Python |
 | IPC 解耦 | 宿主与容器通过文件系统 JSON-RPC 通信，不耦合 SDK 版本 |
 
 ## 架构概览
@@ -169,7 +169,7 @@ docker compose up -d --build
 ### 运行测试
 
 ```bash
-python -m pytest tests/                                         # 全部测试（417 pass，~22s）
+python -m pytest tests/                                         # 全部测试（~22s）
 python -m pytest tests/ --ignore=tests/test_e2e_local.py        # 仅单元/集成（不需要 Docker）
 python -m pytest tests/test_e2e_local.py                        # E2E（需要 Docker + API key）
 ```
@@ -233,7 +233,7 @@ IM 凭证永远不进容器，仅 `ANTHROPIC_API_KEY` 通过环境变量注入�
 
 ## 开发状态
 
-**MVP 已完成**（2026-03-19）。4 个开发阶段全部实现并测试通过，417 个单元/集成测试 pass。
+**MVP 已完成**（2026-03-19）。4 个开发阶段全部实现并测试通过。
 
 ## License
 

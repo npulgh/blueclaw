@@ -16,7 +16,7 @@ Lightweight AI agent runtime platform. Run AI agents securely in Docker containe
 | **Defense in Depth** | Container isolation + network proxy + tool hooks + mount allowlist, layered protection |
 | **Streaming-First** | Agent responses stream to IM in real-time, no waiting for full response |
 | **Long-Connection Preferred** | Feishu WebSocket / Telegram Long Polling as default, Webhook as optional |
-| **Small & Auditable** | Core codebase ≤5,000 lines |
+| **Small & Auditable** | Core codebase under 8,000 lines of Python |
 | **IM-Native** | Telegram + Feishu as first-class citizens, no generic gateway |
 | **IPC Decoupling** | Host and containers communicate via filesystem JSON-RPC, no SDK version coupling |
 
@@ -169,7 +169,7 @@ Requires `.env` and `lynxclaw.config.yaml` configured. See [docker-compose.yml](
 ## Running Tests
 
 ```bash
-python -m pytest tests/                                         # All tests (417 pass, ~22s)
+python -m pytest tests/                                         # All tests (~22s)
 python -m pytest tests/ --ignore=tests/test_e2e_local.py        # Unit/integration only (no Docker)
 python -m pytest tests/test_e2e_local.py                        # E2E (requires Docker + API key)
 ```
@@ -223,7 +223,7 @@ Each Agent call runs in an isolated Docker container with hardening flags:
 
 ## Development Status
 
-**MVP Complete** (2026-03-19). All 4 development phases implemented and tested, 417 unit/integration tests pass.
+**MVP Complete** (2026-03-19). All 4 development phases implemented and tested.
 
 ## License
 

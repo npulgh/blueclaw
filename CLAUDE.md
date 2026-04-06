@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Status
 
-**Lynxclaw MVP is complete.** All 4 phases implemented and tested (2026-03-19). Phase 5 架构升级完成（2026-03-21）：Credential Proxy、Skills 系统、安全配置外置、Sender Allowlist、Channel 自注册。Phase 6 Web Dashboard 完成（2026-03-21）：7 个只读 API、Bearer Token 认证、Alpine.js SPA 前端。417 unit/integration tests pass, 2 skipped (Windows symlink). E2E test suite exists (`tests/test_e2e_local.py`) with 6/8 passing (2 depend on live API availability).
+**Lynxclaw MVP is complete.** All 4 phases implemented and tested (2026-03-19). Phase 5 架构升级完成（2026-03-21）：Credential Proxy、Skills 系统、安全配置外置、Sender Allowlist、Channel 自注册。Phase 6 Web Dashboard 完成（2026-03-21）：7 个只读 API、Bearer Token 认证、Alpine.js SPA 前端。419 unit/integration tests pass, 2 skipped (Windows symlink). E2E test suite exists (`tests/test_e2e_local.py`) with 6/8 passing (2 depend on live API availability).
 
 ## What This Project Is
 
@@ -14,7 +14,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ```bash
 python -m src.main                                              # Start the host process
-python -m pytest tests/                                         # Run all tests (417 pass, ~22s)
+python -m pytest tests/                                         # Run all tests (419 pass, ~22s)
 python -m pytest tests/ --ignore=tests/test_e2e_local.py        # Unit/integration only (no Docker needed)
 python -m pytest tests/test_e2e_local.py                        # E2E (requires Docker + API key)
 docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .  # Build agent image
