@@ -1,0 +1,74 @@
+# lynxclaw.config.yaml — default configuration
+# Sensitive credentials (API keys, tokens) go in .env, NOT here.
+
+# ── Host process ────────────────────────────────────────────────────────────
+host:
+  log_level: debug         # debug | info | warning | error
+
+# ── Agent containers ────────────────────────────────────────────────────────
+container:
+  image: lynxclaw-agent:latest
+  memory: 512m
+  cpus: 1.0
+  network: bridge          # none | proxy (use bridge for testing with direct API access)
+  timeout: 300             # seconds before container is killed
+  max_concurrent: 5        # max simultaneous agent containers
+  lifecycle: ephemeral     # ephemeral | resumable
+  runtime: docker          # docker | podman
+
+# ── Telegram channel ────────────────────────────────────────────────────────
+# Token is read from TELEGRAM_BOT_TOKEN env var.
+telegram:
+  enabled: true
+  mode: polling            # polling | webhook
+
+# ── Feishu / Lark channel ───────────────────────────────────────────────────
+# Credentials are read from FEISHU_APP_ID / FEISHU_APP_SECRET env vars.
+feishu:
+  enabled: false
+  mode: websocket          # websocket | webhook
+
+# ── Message router ──────────────────────────────────────────────────────────
+router:
+  default_trigger: "@bot"
+  history_limit: 50        # messages kept in context per group
+  group_queue_max: 10      # max queued messages per group
+
+# ── Network proxy sidecar ───────────────────────────────────────────────────
+proxy:
+  enabled: false
+  allowed_domains:
+    - api.anthropic.com
+    - "*.google.com"
+    - "*.bing.com"
+
+# ── Streaming responses ─────────────────────────────────────────────────────
+streaming:
+  enabled: true
+  debounce_ms: 500         # flush interval in milliseconds
+  debounce_chars: 200      # flush after this many characters
+
+# ── Security ────────────────────────────────────────────────────────────────
+security:
+  blocked_commands:
+    - "rm -rf /"
+    - "sudo"
+    - "chmod 777"
+    - ":(){:|:&};:"
+  blocked_patterns:
+    - ".ssh"
+    - ".aws"
+    - ".gnupg"
+    - ".env"
+    - "*.pem"
+    - "*.key"
+
+# ── Groups ───────────────────────────────────────────────────────────────────
+# Maps channel chat_id → group name. Written to DB on startup by the router.
+groups:
+  - name: main
+    channel: telegram
+    chat_id: "123456789"
+    is_main: true
+    trigger: ""
+    token_budget: 0      # 0 = unlimited; set to e.g. 500000 to cap monthly tokens

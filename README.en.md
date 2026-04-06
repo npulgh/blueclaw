@@ -89,15 +89,15 @@ ANTHROPIC_API_KEY=sk-ant-...
 TELEGRAM_BOT_TOKEN=your_token
 ```
 
-Also supports Anthropic-compatible endpoints (e.g., Kimi K2):
+Also supports Anthropic-compatible endpoints:
 
 ```
-# Kimi K2
-ANTHROPIC_API_KEY=sk-kimi-...
-ANTHROPIC_BASE_URL=https://api.example.com/v1
+ANTHROPIC_API_KEY=sk-...
+ANTHROPIC_BASE_URL=https://your-api-mirror.example.com/api
 ```
 
 > **Note**: `ANTHROPIC_BASE_URL` should NOT end with `/v1` (CLI appends automatically).
+> See [docs/channel-development.md](docs/channel-development.md) §6 for details.
 
 **Step 3** — Get `chat_id`. Send any message to your bot, then open in browser:
 
@@ -201,11 +201,10 @@ FEISHU_APP_SECRET=...
 
 ## Documentation
 
-| Document | Content |
-|----------|---------|
+| Document                                     | Content                                                            |
+| -------------------------------------------- | ------------------------------------------------------------------ |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture, component design, security model, data schema |
-| [docs/TASKS.md](docs/TASKS.md) | Phased development task list and acceptance criteria |
-| [docs/adr/](docs/adr/) | Architecture Decision Records (why we chose this) |
+| [docs/adr/](docs/adr/)                       | Architecture Decision Records (why we chose this)                  |
 
 ## Security Model
 
@@ -222,7 +221,7 @@ Each Agent call runs in an isolated Docker container with hardening flags:
 
 ## Development Status
 
-**MVP Complete** (2026-03-19). All 4 development phases implemented and tested, 417 unit/integration tests pass. See [docs/TASKS.md](docs/TASKS.md).
+**MVP Complete** (2026-03-19). All 4 development phases implemented and tested, 417 unit/integration tests pass.
 
 ## License
 

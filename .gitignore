@@ -75,7 +75,9 @@ Thumbs.db
 *.db-journal
 *.db-shm
 *.db-wal
-docs/archive/spike-data/test_socket/lat.sock
 
 # Private notes (not for version control)
 notes/
+
+# Runtime config (copy from lynxclaw.config.example.yaml)
+lynxclaw.config.yaml

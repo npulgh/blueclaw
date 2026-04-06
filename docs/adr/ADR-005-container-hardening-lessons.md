@@ -126,7 +126,7 @@ Phase 4 实现了容器安全加固（`--read-only`、`--cap-drop ALL`、`--secu
 
 ### Spec Coding 视角
 
-1. **验收标准必须包含 hardening 环境**: 当前 TASKS.md 的验收标准只要求"测试通过"，未指定在完整 hardening 标志下运行。应在 Phase 4 的验收标准中明确：`docker run --read-only --cap-drop ALL ...` 下容器能正常启动和执行。
+1. **验收标准必须包含 hardening 环境**: 验收标准不能只要求"测试通过"，必须指定在完整 hardening 标志下运行。即：`docker run --read-only --cap-drop ALL ...` 下容器能正常启动和执行。
 
 2. **第三方依赖的假设需显式记录**: Claude Code CLI 写 `~/.claude.json` 是未文档化的行为。类似的隐性假设（"CLI 需要可写 home 目录"）应在 spike 阶段发现并记录在 `spike/findings.md`。
 

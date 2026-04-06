@@ -23,7 +23,6 @@ docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .  # 
 ## Key Design Documents
 
 - `docs/ARCHITECTURE.md` — component design, security model, data schema, directory structure
-- `docs/TASKS.md` — phased task list with acceptance criteria (Phase 1-6 complete, backlog at bottom)
 - `docs/adr/` — architecture decision records explaining *why* key decisions were made
 - `docs/E2E-TESTING.md` — E2E testing strategy and runbook
 - `docs/adr/ADR-005-container-hardening-lessons.md` — container hardening lessons learned

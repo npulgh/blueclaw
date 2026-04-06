@@ -377,9 +377,63 @@ Lynxclaw's security model keeps IM credentials in the host process only.
 Never pass `bot_token`, `app_secret`, or similar values into container env vars.
 Only `ANTHROPIC_API_KEY` enters containers.
 
+**SDK caching the event loop at module level**
+Some SDKs (e.g. `lark-oapi`) cache `asyncio.get_event_loop()` as a module-level
+variable at import time.  If your adapter runs the SDK in a daemon thread with a
+fresh event loop, `asyncio.new_event_loop()` + `set_event_loop()` alone won't
+work — you must also monkey-patch the SDK's cached reference.  Diagnose with
+`grep "get_event_loop\|run_until_complete"` in the SDK source.
+
+**Message type consistency for streaming edits**
+Some platforms (e.g. Feishu) reject `edit_message` calls that change the message
+type.  If your adapter uses streaming edits, the **first** `send_message` must
+already use the target format (e.g. Interactive Card), so that subsequent edits
+are same-type patches.
+
+**Platform permissions ≠ event subscriptions**
+Some platforms (e.g. Feishu) treat API permissions and event subscriptions as
+separate configurations.  "Permission granted" does not mean "events will be
+delivered."  After changing either, you may need to re-publish the app version
+for changes to take effect.
+
 ---
 
-## 6. IM 通道可行性评估
+## 6. Third-Party API Mirror Integration
+
+When using Anthropic-compatible API mirrors (e.g. for cost or latency reasons),
+be aware of URL path handling:
+
+**Golden rule: `ANTHROPIC_BASE_URL` must NOT include `/v1`.**
+Claude Code CLI automatically appends `/v1/messages` to the base URL.
+
+If the agent container uses `api_proxy.py` to relay requests, the proxy must
+handle upstream URLs that may or may not already contain a version prefix:
+
+| Upstream URL | Has version suffix? | `/v1/messages` handling | Final path |
+| --- | --- | --- | --- |
+| `api.example.com/coding/v1` | Yes | Strip `/v1` → `/messages` | `.../coding/v1/messages` ✓ |
+| `api.example.com/api/claudecode` | No | Keep `/v1/messages` | `.../api/claudecode/v1/messages` ✓ |
+
+Pattern for smart path forwarding:
+
+```python
+import re
+has_version_suffix = bool(re.search(r'/v\d+/?$', upstream.rstrip('/')))
+if has_version_suffix and path.startswith("/v1"):
+    path = path[3:]
+```
+
+### Debugging methodology for API mirror issues
+
+1. Add `[PROXY]` stderr logging to `api_proxy.py` — trace actual URLs and response codes
+2. Increase consumer stderr capture length — default may truncate full tracebacks
+3. Manual `docker run` reproduction — bypass host process, see full container output
+4. Layer-by-layer network validation — `docker run python:3.11-slim python3 -c "urllib..."` to confirm container→target connectivity
+5. Local vs container comparison — same API key + URL, works locally but not in container → network/path issue
+
+---
+
+## 7. IM 通道可行性评估
 
 > 调研时间：2026-03-21。为后续 Channel 扩展提供决策参考。
 

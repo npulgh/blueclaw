@@ -89,22 +89,15 @@ ANTHROPIC_API_KEY=sk-ant-...
 TELEGRAM_BOT_TOKEN=你的token
 ```
 
-也支持 Anthropic 兼容 endpoint（如 Kimi K2、REDACTED）：
+也支持 Anthropic 兼容 endpoint：
 
 ```
-# Kimi K2
-ANTHROPIC_API_KEY=sk-kimi-...
-ANTHROPIC_BASE_URL=https://api.example.com/v1
-
-# 或 REDACTED（国内镜像，注意 URL 不含 /v1）
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_BASE_URL=https://api.example.com/api
-ANTHROPIC_AUTH_TOKEN=
+ANTHROPIC_API_KEY=sk-...
+ANTHROPIC_BASE_URL=https://your-api-mirror.example.com/api
 ```
 
 > **注意**：`ANTHROPIC_BASE_URL` 不要以 `/v1` 结尾（CLI 会自动追加）。
-> 使用 REDACTED 时必须设置 `ANTHROPIC_AUTH_TOKEN=`（空值）。
-> 详见 [docs/DEBUG-API-MIRROR.md](docs/DEBUG-API-MIRROR.md)。
+> 详见 [docs/channel-development.md](docs/channel-development.md) §6 Third-Party API Mirror Integration。
 
 Step 3 — 获取 `chat_id`。先给 bot 发一条任意消息，然后在浏览器打开：
 
@@ -220,11 +213,10 @@ FEISHU_APP_SECRET=...
 
 ## 文档
 
-| 文档 | 内容 |
-|------|------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构、组件设计、安全模型、数据模型 |
-| [docs/TASKS.md](docs/TASKS.md) | 分阶段开发任务清单与验收标准 |
-| [docs/adr/](docs/adr/) | 架构决策记录（为什么这么选） |
+| 文档                                         | 内容                                     |
+| -------------------------------------------- | ---------------------------------------- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构、组件设计、安全模型、数据模型   |
+| [docs/adr/](docs/adr/)                       | 架构决策记录（为什么这么选）             |
 
 ## 安全模型
 
@@ -241,7 +233,7 @@ IM 凭证永远不进容器，仅 `ANTHROPIC_API_KEY` 通过环境变量注入�
 
 ## 开发状态
 
-**MVP 已完成**（2026-03-19）。4 个开发阶段全部实现并测试通过，417 个单元/集成测试 pass。详见 [docs/TASKS.md](docs/TASKS.md)。
+**MVP 已完成**（2026-03-19）。4 个开发阶段全部实现并测试通过，417 个单元/集成测试 pass。
 
 ## License
 

@@ -201,7 +201,7 @@ async def _run_with_resume_fallback(
 ) -> tuple[str, str, int, int]:
     """Try run_agent with resume; on failure, retry as new session.
 
-    Third-party API mirrors (Kimi, REDACTED, etc.) may not support the
+    Third-party API mirrors may not support the
     SDK's resume feature. When resume fails, we fall back to a fresh session
     so the user still gets a response instead of an error.
     """

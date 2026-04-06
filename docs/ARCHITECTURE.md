@@ -4,8 +4,8 @@
 > AI Agent 在实现功能前应先阅读本文件，理解"系统是怎么建的"。
 >
 > 关联文档：
-> - [TASKS.md](TASKS.md) — 开发任务清单（"做什么"）
 > - [adr/](adr/) — 架构决策记录（"为什么这么选"）
+> - [channel-development.md](channel-development.md) — Channel 开发指南
 
 ---
 
@@ -318,7 +318,7 @@ async with ClaudeSDKClient(options=ClaudeAgentOptions(mcp_servers={...})) as cli
 
 **文件**：`container/agent-runner/api_proxy.py`、`container/agent-runner/main.py`
 
-Lynxclaw 支持 Anthropic 原生 API 和第三方兼容 endpoint（如 REDACTED、Kimi K2）。
+Lynxclaw 支持 Anthropic 原生 API 和第三方兼容 endpoint。
 
 #### 请求链路
 
@@ -347,20 +347,20 @@ CLI → http://127.0.0.1:9099/v1/messages      → Proxy 转发到真实 upstrea
 
 | upstream URL | 含版本前缀？ | 请求 `/v1/messages` | 转发结果 |
 | ---- | ---- | ---- | ---- |
-| `api.example.com/v1` | 是 | 剥离 `/v1` → `/messages` | `.../coding/v1/messages` ✓ |
-| `api.example.com/api` | 否 | 保留 `/v1/messages` | `.../api/claudecode/v1/messages` ✓ |
+| `api.example.com/coding/v1` | 是 | 剥离 `/v1` → `/messages` | `.../coding/v1/messages` ✓ |
+| `api.example.com/api/proxy` | 否 | 保留 `/v1/messages` | `.../api/proxy/v1/messages` ✓ |
 
 #### 必需环境变量
 
 | 变量 | 用途 | 示例 |
 | ---- | ---- | ---- |
-| `ANTHROPIC_BASE_URL` | 第三方 endpoint（不含 `/v1`） | `https://api.example.com/api` |
+| `ANTHROPIC_BASE_URL` | 第三方 endpoint（不含 `/v1`） | `https://api.example.com/api/proxy` |
 | `ANTHROPIC_AUTH_TOKEN` | 部分镜像要求设为空字符串 | `""` |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | 禁止 CLI 访问 `api.anthropic.com`（GFW 下必需） | `1` |
 
 ### 3.8 GFW 环境网络策略
 
-在中国大陆部署时，`api.telegram.org` 被 GFW 封锁，而国内 API 镜像（如 `api.example.com`、`api.example.com`）可直连。需要分层代理策略：
+在中国大陆部署时，`api.telegram.org` 被 GFW 封锁，而国内 API 镜像可直连。需要分层代理策略：
 
 | 组件 | 目标 | 网络策略 |
 | ---- | ---- | ---- |
@@ -757,9 +757,9 @@ lynxclaw/
 │   └── test_e2e_local.py       # E2E 测试（需 Docker + API key）
 ├── docs/
 │   ├── ARCHITECTURE.md         # 本文件
-│   ├── TASKS.md                # 开发任务清单
 │   ├── E2E-TESTING.md          # E2E 测试策略
-│   ├── DEBUG-API-MIRROR.md     # 第三方 API 镜像调试记录
+│   ├── channel-development.md  # Channel 开发指南（含 API 镜像集成）
+│   ├── skill-spec.md           # Skills 规范
 │   └── adr/                    # 架构决策记录
 ├── Dockerfile                  # 宿主进程镜像（含 Docker CLI）
 ├── docker-compose.yml          # 一键部署（host + agent 镜像构建）
@@ -885,8 +885,6 @@ _ALLOWED_ENV_PREFIXES = {"ANTHROPIC_", "LYNXCLAW_", "CLAUDE_CODE_DISABLE_"}
 ---
 
 ## 十一、Web Dashboard（Phase 6，2026-03-21）
-
-> 设计文档：[superpowers/specs/2026-03-21-web-dashboard-design.md](superpowers/specs/2026-03-21-web-dashboard-design.md)
 
 ### 11.1 概述
 

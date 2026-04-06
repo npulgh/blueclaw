@@ -64,10 +64,10 @@ def make_handler(upstream: str) -> type:
             # The CLI sends absolute paths like /v1/messages, /v1/models/...
             # Smart stripping: only remove the /v1 prefix from the request path
             # when the upstream URL already contains a version prefix (e.g. /v1, /v4).
-            # This prevents double-versioning for providers like Kimi:
-            #   upstream=https://api.example.com/v1  + /v1/messages → strip → /messages ✓
-            # While preserving /v1 for mirrors like REDACTED:
-            #   upstream=https://api.example.com/api + /v1/messages → keep → /v1/messages ✓
+            # This prevents double-versioning when upstream already has a version suffix:
+            #   upstream=https://api.example.com/coding/v1  + /v1/messages → strip → /messages ✓
+            # While preserving /v1 when upstream has no version suffix:
+            #   upstream=https://api.example.com/api/proxy + /v1/messages → keep → /v1/messages ✓
             import re, sys
             has_version_suffix = bool(re.search(r'/v\d+/?$', upstream.rstrip('/')))
             path = self.path

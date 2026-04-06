@@ -368,7 +368,7 @@ async def _group_consumer(
             base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
             if base_url:
                 env_vars["ANTHROPIC_BASE_URL"] = base_url
-            # Forward ANTHROPIC_AUTH_TOKEN (must be "" for some mirrors like REDACTED)
+            # Forward ANTHROPIC_AUTH_TOKEN (required by some mirrors, may be empty string)
             auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
             if auth_token is not None:
                 env_vars["ANTHROPIC_AUTH_TOKEN"] = auth_token
@@ -380,9 +380,9 @@ async def _group_consumer(
             env_vars["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 
         # Note: Do NOT forward HTTPS_PROXY into the container.
-        # The container's api_proxy.py connects directly to the upstream API
-        # (e.g. api.example.com). Routing through a GFW-bypass proxy (Clash etc.)
-        # can cause ConnectionRefused for domestic Chinese API endpoints.
+        # The container's api_proxy.py connects directly to the upstream API.
+        # Routing through a proxy can cause ConnectionRefused for API endpoints
+        # that are directly accessible from the container network.
         # Only the host process needs HTTPS_PROXY (for Telegram API access).
 
         # Mark message as 'processing' before dispatching

@@ -38,4 +38,4 @@
 
 ## 计划中的功能
 
-详见 [docs/TASKS.md](docs/TASKS.md) 的 Backlog 部分。
+详见 GitHub Issues。
