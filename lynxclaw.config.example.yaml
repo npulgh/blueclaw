@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # lynxclaw.config.yaml — default configuration
 # Sensitive credentials (API keys, tokens) go in .env, NOT here.
 

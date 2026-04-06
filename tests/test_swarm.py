@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for src/swarm.py — T4.2 Agent Swarms.
 
 All tests mock ContainerManager and DB — no real Docker or SQLite required.

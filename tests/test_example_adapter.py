@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for ExampleAdapter.
 
 No external dependencies — the echo adapter is fully self-contained.

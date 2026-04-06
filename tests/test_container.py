@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for src/container_manager.py — T1.8 Container Manager (Ephemeral).
 
 All tests mock subprocess calls — no real Docker required.

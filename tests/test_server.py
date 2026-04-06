@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for WebhookServer (T4.5).
 
 Uses FastAPI TestClient (httpx) — no real network required.

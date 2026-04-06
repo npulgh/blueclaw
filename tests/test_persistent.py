@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for src/persistent_container.py — T4.4 Persistent Container Mode.
 
 All tests mock subprocess calls — no real Docker required.

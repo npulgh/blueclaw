@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for src/router.py — MessageRouter (T1.6)."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Layer-1 End-to-End tests: ExampleAdapter + real Docker + real IPC filesystem.
 
 No IM credentials required.  Requires:

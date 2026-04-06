@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 lynxpurr
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for ChannelAdapter ABC and ChannelRegistry.
 
 Uses a MockAdapter to verify register/lookup and start/stop lifecycle.
