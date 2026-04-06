@@ -59,7 +59,7 @@ docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .
 
 ### 测试要求
 
-- 所有 PR 必须通过现有测试（417+ pass）
+- 所有 PR 必须通过现有测试（419+ pass）
 - 新功能需附带测试
 - E2E 测试需要 Docker + API key，本地开发可跳过
 

@@ -229,7 +229,7 @@ FEISHU_APP_SECRET=...
 - `--pids-limit 256` — 进程数上限
 - `--memory 512m --cpus 1.0` — 资源限制
 
-IM 凭证永远不进容器，仅 `ANTHROPIC_API_KEY` 通过环境变量注入。
+**IM 凭证永远不进容器。** 默认模式下，`ANTHROPIC_API_KEY` 通过环境变量注入（容器为临时 `--rm`）。如需更强隔离，可启用 [Credential Proxy](docs/adr/006-credential-proxy.md)（`LYNXCLAW_CREDENTIAL_PROXY=1`），API 密钥将完全不进入容器。
 
 ## 开发状态
 

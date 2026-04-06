@@ -21,7 +21,7 @@
 | **纵深防御** | 容器隔离 + 网络代理 + 工具钩子 + 挂载白名单，多层叠加 |
 | **流式优先** | Agent 响应边生成边推送到 IM，用户无需等待完整回复 |
 | **长连接优先** | 飞书 WebSocket / Telegram Long Polling 为首选，Webhook 可选 |
-| **小而可审计** | 核心代码 ≤5,000 行 |
+| **小而可审计** | 核心代码 ≤10,000 行 |
 | **IM 原生** | Telegram + 飞书为一等公民，不做通用网关 |
 | **IPC 解耦** | 宿主与容器通过文件系统 JSON-RPC 通信，不耦合 SDK 版本 |
 
@@ -753,7 +753,7 @@ lynxclaw/
 │   ├── store/messages.db
 │   ├── ipc/{group}/            # outbox/ inbox/ audit/
 │   └── audit_log.jsonl
-├── tests/                      # 417 pass, 2 skip（含 dashboard API + auth 测试）
+├── tests/                      # 419 pass, 2 skip（含 dashboard API + auth 测试）
 │   └── test_e2e_local.py       # E2E 测试（需 Docker + API key）
 ├── docs/
 │   ├── ARCHITECTURE.md         # 本文件
@@ -850,7 +850,7 @@ groups/
 _ALLOWED_ENV_PREFIXES = {"ANTHROPIC_", "LYNXCLAW_", "CLAUDE_CODE_DISABLE_"}
 ```
 
-不匹配的环境变量被拦截并记录 warning。实现 Credential Proxy 后，`ANTHROPIC_API_KEY` 也从白名单中移除。
+不匹配的环境变量被拦截并记录 warning。启用 Credential Proxy（`LYNXCLAW_CREDENTIAL_PROXY=1`）后，`ANTHROPIC_API_KEY` 不再注入容器环境变量，而是通过 HTTP 代理按需提供。
 
 **影响范围**：`src/container_manager.py`
 
