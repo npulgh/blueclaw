@@ -1,76 +1,78 @@
 # Lynxclaw
 
+English | [中文](README.zh.md)
+
+Lightweight AI agent runtime platform. Run AI agents securely in Docker containers, interacting via Telegram / Feishu (Lark).
+
 [![CI](https://github.com/lynxpurr/lynxclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/lynxpurr/lynxclaw/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-[English](README.en.md) | 中文
+## Design Philosophy
 
-轻量级 AI 智能体运行平台。将 AI Agent 安全地运行在 Docker 容器中，通过 Telegram / 飞书与用户交互。
+| Principle | Description |
+|-----------|-------------|
+| **Container as Security Boundary** | Agents run in minimal-privilege Docker containers with OS-level isolation |
+| **Defense in Depth** | Container isolation + network proxy + tool hooks + mount allowlist, layered protection |
+| **Streaming-First** | Agent responses stream to IM in real-time, no waiting for full response |
+| **Long-Connection Preferred** | Feishu WebSocket / Telegram Long Polling as default, Webhook as optional |
+| **Small & Auditable** | Core codebase ≤5,000 lines |
+| **IM-Native** | Telegram + Feishu as first-class citizens, no generic gateway |
+| **IPC Decoupling** | Host and containers communicate via filesystem JSON-RPC, no SDK version coupling |
 
-## 设计哲学
-
-| 原则 | 说明 |
-|------|------|
-| 容器即安全边界 | Agent 运行在最小权限 Docker 容器中，OS 级隔离 |
-| 纵深防御 | 容器隔离 + 网络代理 + 工具钩子 + 挂载白名单，多层叠加 |
-| 流式优先 | Agent 响应边生成边推送到 IM，用户无需等待完整回复 |
-| 小而可审计 | 核心代码 ≤ 5,000 行 |
-| IPC 解耦 | 宿主与容器通过文件系统 JSON-RPC 通信，不耦合 SDK 版本 |
-
-## 架构概览
+## Architecture Overview
 
 ```
-Telegram / 飞书
+Telegram / Feishu
       ↓
   Channel Adapter
       ↓
   Message Router  ──→  SQLite (messages, groups, sessions, tasks)
       ↓
-Container Manager  (asyncio.Semaphore, max 5 并发)
+Container Manager  (asyncio.Semaphore, max 5 concurrent)
       ↓
 Docker Container  (--cap-drop ALL / --read-only / --network none)
       │
   Agent Runner  (Claude Agent SDK + PreToolUse/PostToolUse hooks)
       │
-  IPC Bridge  (MCP stdio → /workspace/ipc/outbox/ 文件)
+  IPC Bridge  (MCP stdio → /workspace/ipc/outbox/ files)
       ↓
-  IPC Watcher  (watchdog 事件驱动)
+  IPC Watcher  (watchdog event-driven)
       ↓
-  Channel send_message / edit_message (流式更新)
+  Channel send_message / edit_message (streaming updates)
 ```
 
-## 快速开始
+## Quick Start
 
-### 前置条件
+### Prerequisites
 
 - Python 3.11+
 - Docker Engine
-- Anthropic API Key（或兼容 endpoint，如 Kimi K2）
-- （可选）Telegram Bot Token / 飞书应用凭证
+- Anthropic API Key (or compatible endpoint like Kimi K2)
+- (Optional) Telegram Bot Token / Feishu App Credentials
 
-### 安装
+### Installation
 
 ```bash
 git clone https://github.com/lynxpurr/lynxclaw.git
 cd lynxclaw
 
-# 创建并激活虚拟环境
+# Create and activate virtual environment
 python -m venv .venv
 source .venv/bin/activate        # Linux/macOS
 .venv\Scripts\activate           # Windows
 
-# 安装依赖
+# Install dependencies
 pip install -e ".[dev]"
 
-# 配置环境变量
+# Configure environment
 cp .env.example .env
-# 编辑 .env，填入 ANTHROPIC_API_KEY 等凭证
+# Edit .env, fill in ANTHROPIC_API_KEY etc.
 ```
 
-### 构建 Agent 镜像
+### Build Agent Image
 
-所有运行路径都需要先构建 Agent 容器镜像：
+All runtime paths require the Agent container image:
 
 ```bash
 docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .
@@ -78,38 +80,36 @@ docker build -t lynxclaw-agent:latest -f container/agent-runner/Dockerfile .
 
 ---
 
-### 路径 A：接 Telegram Bot（推荐体感最好）
+### Path A: Telegram Bot (Recommended)
 
-Step 1 — 创建 Bot：在 Telegram 找 `@BotFather`，发 `/newbot`，获取 token。
+**Step 1** — Create Bot: Message `@BotFather` on Telegram, send `/newbot`, get the token.
 
-Step 2 — 配置 `.env`：
+**Step 2** — Configure `.env`:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
-TELEGRAM_BOT_TOKEN=你的token
+TELEGRAM_BOT_TOKEN=your_token
 ```
 
-也支持 Anthropic 兼容 endpoint：
+Also supports Anthropic-compatible endpoints:
 
 ```
 ANTHROPIC_API_KEY=sk-...
 ANTHROPIC_BASE_URL=https://your-api-mirror.example.com/api
 ```
 
-> **注意**：`ANTHROPIC_BASE_URL` 不要以 `/v1` 结尾（CLI 会自动追加）。
-> 详见 [docs/channel-development.md](docs/channel-development.md) §6 Third-Party API Mirror Integration。
+> **Note**: `ANTHROPIC_BASE_URL` should NOT end with `/v1` (CLI appends automatically).
+> See [docs/channel-development.md](docs/channel-development.md) §6 for details.
 
-Step 3 — 获取 `chat_id`。先给 bot 发一条任意消息，然后在浏览器打开：
+**Step 3** — Get `chat_id`. Send any message to your bot, then open in browser:
 
 ```
-https://api.telegram.org/bot<你的TOKEN>/getUpdates
+https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
 ```
 
-在返回的 JSON 中找到 `result[0].message.chat.id`，即为你的 `chat_id`。私聊是正数（如 `123456789`），群聊是负数（如 `-1001234567890`）。
+Find `result[0].message.chat.id` in the JSON. Private chats are positive (e.g., `123456789`), groups are negative (e.g., `-1001234567890`).
 
-> **常见问题**：如果返回 404，检查 URL 中 `bot` 前缀是否存在（格式必须是 `bot123456:AAH...`，`bot` 和 token 之间无空格）。如果 `result` 为空数组，先给 bot 发一条消息再刷新。
-
-Step 4 — 启用 Telegram + 配置 group，编辑 `lynxclaw.config.yaml`：
+**Step 4** — Enable Telegram + configure group, edit `lynxclaw.config.yaml`:
 
 ```yaml
 telegram:
@@ -119,74 +119,64 @@ telegram:
 groups:
   - name: main
     channel: telegram
-    chat_id: "你的chat_id"   # Step 3 中获取的值
+    chat_id: "your_chat_id"   # From Step 3
     is_main: true
-    trigger: ""              # 私聊建议设为空（所有消息触发）；群聊可设为 "@bot"
+    trigger: ""               # Private chat: empty (all messages trigger); Group: use "@bot"
     token_budget: 0
 ```
 
-> **trigger 说明**：`trigger: "@bot"` 要求消息必须以 `@bot` 开头才会触发 agent。私聊场景建议设为 `""`（空字符串），让所有消息都触发。群聊场景建议保留前缀，避免 bot 响应无关对话。
+> **trigger**: `trigger: "@bot"` requires messages to start with `@bot`. Private chat recommended ` ""` (empty) to trigger on all messages.
 
-Step 5 — 启动：
+**Step 5** — Start:
 
 ```bash
 python -m src.main
 ```
 
-Step 6 — 体验：
+**Step 6** — Try it:
 
-在 Telegram 群里发 `@bot 你好`（或私聊），观察：
+Send `@bot hello` in the Telegram group (or private chat), observe:
 
-- 终端日志显示：消息路由 → 容器启动 → Agent 调用 API → IPC 响应
-- Bot 流式回复：先发一条消息，然后不断 edit 更新内容
-- 数据持久化：`data/store/messages.db` 中可查看消息记录和 token 用量
+- Terminal logs: message routing → container start → Agent API call → IPC response
+- Bot streaming reply: sends a message first, then continuously edits to update content
+- Data persistence: check `data/store/messages.db` for message records and token usage
 
 ---
 
-### 路径 B：本地 E2E（不需要 IM token）
+### Path B: Local E2E (No IM token needed)
 
-使用内置的 `ExampleAdapter` + 真实 Docker + 真实 API，跑通完整链路：
+Run the full pipeline with built-in `ExampleAdapter` + real Docker + real API:
 
 ```bash
-# 确保 .env 中 API key 有效
+# Ensure API key is valid in .env
 python -m pytest tests/test_e2e_local.py -v -x
 ```
 
-这会走完整消息流：注入消息 → Router → 启动容器 → Agent 调用 API → IPC 写文件 → Watcher 回调 → Adapter 收到回复。
+This runs the complete flow: inject message → Router → start container → Agent API call → IPC write file → Watcher callback → Adapter receives response.
 
 ---
 
-### 路径 C：Docker Compose 一键部署
+### Path C: Docker Compose One-Command Deploy
 
 ```bash
 docker compose up -d --build
 ```
 
-需要先配好 `.env` 和 `lynxclaw.config.yaml`。详见 [docker-compose.yml](docker-compose.yml)。
+Requires `.env` and `lynxclaw.config.yaml` configured. See [docker-compose.yml](docker-compose.yml).
 
 ---
 
-### 运行测试
+## Running Tests
 
 ```bash
-python -m pytest tests/                                         # 全部测试（417 pass，~22s）
-python -m pytest tests/ --ignore=tests/test_e2e_local.py        # 仅单元/集成（不需要 Docker）
-python -m pytest tests/test_e2e_local.py                        # E2E（需要 Docker + API key）
+python -m pytest tests/                                         # All tests (417 pass, ~22s)
+python -m pytest tests/ --ignore=tests/test_e2e_local.py        # Unit/integration only (no Docker)
+python -m pytest tests/test_e2e_local.py                        # E2E (requires Docker + API key)
 ```
 
-### 常见调整
+## Configuration
 
-| 需求 | 配置项 |
-|------|--------|
-| Agent 需要联网（搜索等） | `container.network: proxy` + `proxy.enabled: true` |
-| 使用兼容 API endpoint | `.env` 中设置 `ANTHROPIC_BASE_URL` |
-| 容器保持运行（多轮对话复用） | `container.lifecycle: resumable` |
-| 调整流式刷新频率 | `streaming.debounce_ms` / `streaming.debounce_chars` |
-| 限制月度 token 用量 | `groups[].token_budget: 500000` |
-
-## 配置
-
-主配置文件：`lynxclaw.config.yaml`（参考 `docs/ARCHITECTURE.md §8`）
+Main config file: `lynxclaw.config.yaml` (see [docs/ARCHITECTURE.md §8](docs/ARCHITECTURE.md))
 
 ```yaml
 container:
@@ -202,7 +192,7 @@ feishu:
   mode: websocket         # websocket | webhook
 ```
 
-敏感凭证通过 `.env` 传入（不进配置文件）：
+Sensitive credentials go in `.env` (not in config file):
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
@@ -211,32 +201,32 @@ FEISHU_APP_ID=...
 FEISHU_APP_SECRET=...
 ```
 
-## 文档
+## Documentation
 
-| 文档                                         | 内容                                     |
-| -------------------------------------------- | ---------------------------------------- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构、组件设计、安全模型、数据模型   |
-| [docs/adr/](docs/adr/)                       | 架构决策记录（为什么这么选）             |
+| Document                                     | Content                                                            |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture, component design, security model, data schema |
+| [docs/adr/](docs/adr/)                       | Architecture Decision Records (why we chose this)                  |
 
-## 安全模型
+## Security Model
 
-每个 Agent 调用在独立 Docker 容器中运行，硬化参数：
+Each Agent call runs in an isolated Docker container with hardening flags:
 
-- `--cap-drop ALL` — 移除所有 Linux Capabilities
-- `--read-only` — 只读根文件系统
-- `--network none` — 默认无网络（联网走 Proxy Sidecar）
-- `--user 1000:1000` — 非 root 用户
-- `--pids-limit 256` — 进程数上限
-- `--memory 512m --cpus 1.0` — 资源限制
+- `--cap-drop ALL` — Remove all Linux Capabilities
+- `--read-only` — Read-only root filesystem
+- `--network none` — No network by default (networking via Proxy Sidecar)
+- `--user 1000:1000` — Non-root user
+- `--pids-limit 256` — Process limit
+- `--memory 512m --cpus 1.0` — Resource limits
 
-IM 凭证永远不进容器，仅 `ANTHROPIC_API_KEY` 通过环境变量注入。
+**IM credentials never enter containers**, only `ANTHROPIC_API_KEY` is injected via environment variable.
 
-## 开发状态
+## Development Status
 
-**MVP 已完成**（2026-03-19）。4 个开发阶段全部实现并测试通过，417 个单元/集成测试 pass。
+**MVP Complete** (2026-03-19). All 4 development phases implemented and tested, 417 unit/integration tests pass.
 
 ## License
 
 GNU Affero General Public License v3.0 (AGPL-3.0)
 
-详见 [LICENSE](./LICENSE) 文件。
+See [LICENSE](./LICENSE) file for details.
