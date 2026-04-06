@@ -271,9 +271,13 @@ async def test_edit_message_raises_when_not_initialised():
 # ---------------------------------------------------------------------------
 
 def test_build_content_text():
+    # Plain text is wrapped in an Interactive Card so that subsequent
+    # edit_message() calls (which PATCH with card content) work correctly.
+    # Feishu does not allow patching a plain-text message into a card.
     msg_type, content = _build_content(OutgoingMessage(text="hello"))
-    assert msg_type == "text"
-    assert json.loads(content) == {"text": "hello"}
+    assert msg_type == "interactive"
+    card = json.loads(content)
+    assert card["elements"][0]["content"] == "hello"
 
 
 def test_build_content_rich_text():
@@ -285,8 +289,9 @@ def test_build_content_rich_text():
 
 def test_build_content_empty_text():
     msg_type, content = _build_content(OutgoingMessage())
-    assert msg_type == "text"
-    assert json.loads(content) == {"text": ""}
+    assert msg_type == "interactive"
+    card = json.loads(content)
+    assert card["elements"][0]["content"] == ""
 
 
 # ---------------------------------------------------------------------------
