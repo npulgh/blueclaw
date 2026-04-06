@@ -1,8 +1,9 @@
 # Third-Party Dependency Licenses
 
 Lynxclaw is licensed under AGPL-3.0-or-later. This file documents the licenses
-of all direct third-party dependencies. All listed licenses are compatible with
-AGPL-3.0.
+of all direct Python dependencies. Frontend CDN dependencies (Tailwind CSS,
+Alpine.js, Chart.js) are loaded at runtime via CDN and licensed under MIT.
+All listed licenses are compatible with AGPL-3.0.
 
 Last verified: 2026-04-06
 
