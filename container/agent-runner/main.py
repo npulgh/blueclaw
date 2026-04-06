@@ -305,7 +305,7 @@ async def main() -> None:
 
     # --- Start local proxy if upstream doesn't support /v1/models/{id} ---
     # Claude Code CLI validates the model via GET /v1/models/{id}?beta=true before
-    # sending any prompt. Third-party providers (e.g. Kimi) return 404 for this
+    # sending any prompt. Some third-party providers return 404 for this
     # endpoint, causing the CLI to abort. The proxy intercepts that call and returns
     # a fake 200, then forwards all other requests to the real upstream.
     upstream_url = os.environ.get("ANTHROPIC_BASE_URL", "")

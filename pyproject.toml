@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "lynxclaw"
 version = "0.1.0"
 description = "Lightweight AI agent runtime platform"
-readme = "README.en.md"
+readme = "README.md"
 license = {text = "AGPL-3.0"}
 requires-python = ">=3.11"
 authors = [

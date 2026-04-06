@@ -9,7 +9,7 @@
 """Lightweight proxy that intercepts Claude Code CLI model validation requests.
 
 The Claude Code CLI calls GET /v1/models/{model_id}?beta=true before sending
-any prompt. Third-party providers (e.g. Kimi) don't implement this endpoint,
+any prompt. Some third-party providers don't implement this endpoint,
 causing the CLI to abort with "model not found" before making any real API call.
 
 This proxy:
