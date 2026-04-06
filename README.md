@@ -219,7 +219,7 @@ Each Agent call runs in an isolated Docker container with hardening flags:
 - `--pids-limit 256` — Process limit
 - `--memory 512m --cpus 1.0` — Resource limits
 
-**IM credentials never enter containers**, only `ANTHROPIC_API_KEY` is injected via environment variable.
+**IM credentials never enter containers.** By default, `ANTHROPIC_API_KEY` is injected via environment variable (containers are ephemeral `--rm`). For stronger isolation, enable [Credential Proxy](docs/adr/006-credential-proxy.md) (`LYNXCLAW_CREDENTIAL_PROXY=1`) so the API key never enters the container at all.
 
 ## Development Status
 

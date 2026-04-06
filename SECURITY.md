@@ -51,7 +51,9 @@
 ### 凭证管理
 
 - **IM 凭证**（Telegram Token、飞书 App ID/Secret）**永不**进入容器
-- **API Key** 通过 Credential Proxy 按需注入，不在容器环境变量中暴露
+- **API Key**：支持两种模式
+  - **Credential Proxy 模式**（推荐）：设置 `LYNXCLAW_CREDENTIAL_PROXY=1` 启用，API Key 由宿主侧 HTTP Proxy 注入请求头，**不进入容器环境变量**（参见 ADR-006）
+  - **直传模式**（默认）：API Key 通过 `-e ANTHROPIC_API_KEY` 注入容器环境变量。容器为临时实例（`--rm`），销毁后 key 随之消失，但运行期间容器内进程可读取
 - 用户自托管时必须自行保管 `.env` 文件
 
 ### 网络访问
