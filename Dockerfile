@@ -20,7 +20,7 @@ COPY pyproject.toml .
 RUN pip install --no-cache-dir .
 
 COPY src/ src/
-COPY lynxclaw.config.yaml .
+COPY lynxclaw.config.example.yaml lynxclaw.config.yaml
 COPY groups/ groups/
 
 RUN mkdir -p data/store data/ipc

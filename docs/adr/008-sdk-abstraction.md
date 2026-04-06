@@ -81,7 +81,7 @@ container:
 
 ### 文档表述
 
-- README / DESIGN.md：移除"以 Claude Agent SDK 为核心"的表述
+- README：移除"以 Claude Agent SDK 为核心"的表述
 - ARCHITECTURE.md：明确 SDK 是"容器内可替换实现"
 - 技术栈表格：标注"当前实现（可替换）"
 
